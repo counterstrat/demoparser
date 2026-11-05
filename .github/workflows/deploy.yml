@@ -20,18 +20,14 @@ jobs:
       run:
         working-directory: ./src/python
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
 
       - if: matrix.python-version == '3.13'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: 3.13
           architecture: ${{ matrix.target }}
@@ -55,12 +51,8 @@ jobs:
       run:
         working-directory: ./src/python
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Build Wheels
         uses: PyO3/maturin-action@v1
@@ -79,15 +71,15 @@ jobs:
                 ;;
               "x86" | "x86_64")
                 # NOTE: rust-cross/manylinux docker images are CentOS based
-                yum install -y wget
-                wget https://github.com/protocolbuffers/protobuf/releases/download/v25.1/protoc-25.1-linux-x86_64.zip
-                unzip protoc-25.1-linux-x86_64.zip -d $HOME/protoc
-                mv $HOME/protoc/bin/protoc /usr/local/bin
-                mv $HOME/protoc/include/* /usr/local/include/
+                yum install -y wget unzip
+                wget https://github.com/protocolbuffers/protobuf/releases/download/v23.4/protoc-23.4-linux-x86_64.zip
+                unzip protoc-23.4-linux-x86_64.zip -d $HOME/protoc
+                mv $HOME/protoc/bin/protoc /usr/local/bin/
+                cp -r $HOME/protoc/include/* /usr/local/include/
                 chmod 755 /usr/local/bin/protoc
+                protoc --version
                 ;;
             esac
-
 
   macos:
     runs-on: macos-latest
@@ -99,17 +91,11 @@ jobs:
       run:
         working-directory: ./src/python
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Install Protoc
-        run: |
-          brew update
-          brew install protobuf
+        uses: arduino/setup-protoc@v3
 
       - name: Build Wheels
         uses: PyO3/maturin-action@v1
