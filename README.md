@@ -1,7 +1,10 @@
 # Demo parser for Counter-Strike 2
 
-We now have a discord channel: [Discord](https://discord.gg/rNUjS4vfnX)
+## Attribution
 
+This project is a fork of [LaihoE/demoparser](https://github.com/LaihoE/demoparser), originally written by LaihoE under the MIT license. CounterStrat maintains this fork; see [LICENSE](./LICENSE) for details.
+
+Please report issues with this fork here, not in the upstream repository.
 
 Demoparser is a tool for analysing CS2 replay files "demos". All the heavy lifting is done in Rust, but you use it from the comfort of Python/JavaScript.
 The parser takes a slightly different approach to exposing the information in the demo. Rather than letting you hook onto events in a streaming fashion, it lets you "query" the demo similarly to how you would interact with a database. 
