@@ -64,4 +64,4 @@ jobs:
 
           maturin develop
           python3 tests/signature_tests.py
-          python3 -m mypy.stubtest demoparser2 --allowlist tests/mypy-stubtest-allowlist.txt
+          python3 -m mypy.stubtest counterstrat_demoparser --allowlist tests/mypy-stubtest-allowlist.txt

@@ -3,8 +3,8 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "demoparser2"
-dynamic = ["version"]
+name = "counterstrat-demoparser"
+version = "0.1.0"
 requires-python = ">=3.8"
 dependencies = ["pandas>=1.5.0", "numpy", "polars", "pyarrow", "tqdm"]
 classifiers = [

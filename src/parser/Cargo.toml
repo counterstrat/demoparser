@@ -1,7 +1,8 @@
 [package]
-name = "parser"
-version = "0.1.1"
+name = "counterstrat-demoparser"
+version.workspace = true
 edition = "2021"
+publish = false
 
 [dependencies]
 bitter = "0.7.0"
@@ -31,9 +32,3 @@ path = "../csgoproto"
 # SoA serializer shape-parity test (`second_pass::variants::tests`) needs
 # `serde_json::to_value`; test-only, never linked into downstream builds.
 serde_json = "1"
-
-[profile.dev]
-overflow-checks = false
-
-[profile.release]
-debug = true

@@ -1,12 +1,12 @@
 {
-  "name": "@laihoe/demoparser2-darwin-universal",
-  "version": "0.8.1",
+  "name": "@counterstrat/demoparser-darwin-universal",
+  "version": "0.1.0",
   "os": [
     "darwin"
   ],
-  "main": "demoparser2.darwin-universal.node",
+  "main": "demoparser.darwin-universal.node",
   "files": [
-    "demoparser2.darwin-universal.node"
+    "demoparser.darwin-universal.node"
   ],
   "license": "MIT",
   "engines": {

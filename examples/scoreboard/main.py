@@ -1,4 +1,4 @@
-from demoparser2 import DemoParser
+from counterstrat_demoparser import DemoParser
 
 
 parser = DemoParser("path_to_demo.dem")

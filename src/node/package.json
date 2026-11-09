@@ -1,10 +1,10 @@
 {
-  "name": "@laihoe/demoparser2",
-  "version": "0.8.1",
+  "name": "@counterstrat/demoparser",
+  "version": "0.1.0",
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {
-    "name": "demoparser2",
+    "name": "demoparser",
     "triples": {
       "additional": [
         "aarch64-apple-darwin",

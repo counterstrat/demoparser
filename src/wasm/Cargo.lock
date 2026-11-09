@@ -105,7 +105,7 @@ checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
 name = "csgoproto"
-version = "0.1.5"
+version = "0.1.0"
 dependencies = [
  "phf",
  "prost",
@@ -115,14 +115,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "demoparser2"
+name = "counterstrat-demoparser-wasm"
 version = "0.1.0"
 dependencies = [
  "csgoproto",
  "getrandom 0.2.15",
  "itertools 0.10.5",
  "js-sys",
- "parser",
+ "counterstrat-demoparser",
  "serde",
  "serde-wasm-bindgen",
  "wasm-bindgen",
@@ -313,8 +313,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "945462a4b81e43c4e3ba96bd7b49d834c6f61198356aa858733bc4acf3cbe62e"
 
 [[package]]
-name = "parser"
-version = "0.1.1"
+name = "counterstrat-demoparser"
+version = "0.1.0"
 dependencies = [
  "ahash",
  "bit_reverse",

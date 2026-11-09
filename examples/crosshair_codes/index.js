@@ -1,4 +1,4 @@
-var {parseEvent, parseTicks} = require('@laihoe/demoparser2');
+var {parseEvent, parseTicks} = require('@counterstrat/demoparser');
 
 
 const pathToDemo = "path/to/demo.dem";

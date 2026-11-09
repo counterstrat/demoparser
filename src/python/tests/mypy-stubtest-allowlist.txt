@@ -1,1 +1,1 @@
-demoparser2.demoparser2
+counterstrat_demoparser.counterstrat_demoparser

@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+  "src/csgoproto",
+  "src/node",
+  "src/parser",
+  "src/python",
+  "src/wasm",
+]
+
+[workspace.package]
+version = "0.1.0"
+
+[profile.dev]
+overflow-checks = false
+
+[profile.release]
+debug = true
+lto = true

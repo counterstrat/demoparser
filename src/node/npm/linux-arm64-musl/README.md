@@ -1,3 +1,3 @@
-# `@laihoe/demoparser2-linux-arm64-musl`
+# `@counterstrat/demoparser-linux-arm64-musl`
 
-This is the **aarch64-unknown-linux-musl** binary for `@laihoe/demoparser2`
+This is the **aarch64-unknown-linux-musl** binary for `@counterstrat/demoparser`

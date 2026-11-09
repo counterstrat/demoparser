@@ -1,4 +1,4 @@
-var {parseEvent} = require('@laihoe/demoparser2');
+var {parseEvent} = require('@counterstrat/demoparser');
 
 const filePath = "path/to/demo.dem"
 let kills = parseEvent(filePath, "player_death", ["last_place_name", "team_name"], ["total_rounds_played", "is_warmup_period"])

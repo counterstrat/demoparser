@@ -1,4 +1,4 @@
-from demoparser2 import DemoParser
+from counterstrat_demoparser import DemoParser
 
 # make sure your demo has chickens
 parser = DemoParser("path/to/demo.dem")

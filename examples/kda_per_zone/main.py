@@ -1,4 +1,4 @@
-from demoparser2 import DemoParser
+from counterstrat_demoparser import DemoParser
 
 MY_STEAMID = 765611111111111
 

@@ -11,17 +11,15 @@ The parser takes a slightly different approach to exposing the information in th
 
 
 ### Install
-Python: ```pip install demoparser2``` (python >= 3.8)
+Python: ```pip install counterstrat-demoparser``` (python >= 3.8)
 
-NodeJS: ```npm i @laihoe/demoparser2```
-
-WASM: ```npm i demoparser2```
+NodeJS: ```npm i @counterstrat/demoparser```
 
 
 ### Getting started
 #### Python
 ```python
-from demoparser2 import DemoParser
+from counterstrat_demoparser import DemoParser
 
 parser = DemoParser("path_to_demo.dem")
 event_df = parser.parse_event("player_death", player=["X", "Y"], other=["total_rounds_played"])
@@ -29,7 +27,7 @@ ticks_df = parser.parse_ticks(["X", "Y"])
 ```
 #### NodeJS
 ```JavaScript
-var {parseEvent, parseTicks} = require('@laihoe/demoparser2');
+var {parseEvent, parseTicks} = require('@counterstrat/demoparser');
 
 let event_json = parseEvent("path_to_demo.dem", "player_death", ["X", "Y"], ["total_rounds_played"])
 let ticks_json = parseTicks("path_to_demo.dem", ["X", "Y"])
