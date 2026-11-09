@@ -1643,7 +1643,7 @@ fn find_type_of_vals(pairs: &Vec<&EventField>) -> Result<Option<Variant>, DemoPa
 }
 
 #[pymodule]
-fn demoparser2(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn counterstrat_demoparser(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DemoParser>()?;
     m.add_class::<WantedPropState>()?;
     Ok(())

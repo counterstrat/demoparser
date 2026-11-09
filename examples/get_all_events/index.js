@@ -1,4 +1,4 @@
-var {parseEvents, listGameEvents} = require('@laihoe/demoparser2');
+var {parseEvents, listGameEvents} = require('@counterstrat/demoparser');
 
 
 const pathToDemo = "path/to/demo.dem"

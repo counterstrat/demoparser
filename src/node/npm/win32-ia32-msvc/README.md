@@ -1,3 +1,3 @@
-# `@laihoe/demoparser2-win32-ia32-msvc`
+# `@counterstrat/demoparser-win32-ia32-msvc`
 
-This is the **i686-pc-windows-msvc** binary for `@laihoe/demoparser2`
+This is the **i686-pc-windows-msvc** binary for `@counterstrat/demoparser`

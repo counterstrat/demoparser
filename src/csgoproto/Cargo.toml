@@ -1,6 +1,6 @@
 [package]
 name = "csgoproto"
-version = "0.1.5"
+version.workspace = true
 authors = ["Laiho"]
 edition = "2021"
 

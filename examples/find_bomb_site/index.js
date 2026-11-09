@@ -1,4 +1,4 @@
-var {parseEvent} = require('@laihoe/demoparser2');
+var {parseEvent} = require('@counterstrat/demoparser');
 
 // The event includes a field called site, but it gives you a big int like 204 etc.
 // This will give you fields like "BombsiteA" and "BombsiteB"

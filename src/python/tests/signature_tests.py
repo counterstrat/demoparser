@@ -3,7 +3,7 @@ from unittest import TestCase
 from typing import Union
 
 import pandas as pd
-from demoparser2 import DemoParser, WantedPropState
+from counterstrat_demoparser import DemoParser, WantedPropState
 
 demo_path = "../parser/test_demo.dem"
 

@@ -1,15 +1,15 @@
 {
-  "name": "@laihoe/demoparser2-android-arm-eabi",
-  "version": "0.8.1",
+  "name": "@counterstrat/demoparser-android-arm-eabi",
+  "version": "0.1.0",
   "os": [
     "android"
   ],
   "cpu": [
     "arm"
   ],
-  "main": "demoparser2.android-arm-eabi.node",
+  "main": "demoparser.android-arm-eabi.node",
   "files": [
-    "demoparser2.android-arm-eabi.node"
+    "demoparser.android-arm-eabi.node"
   ],
   "license": "MIT",
   "engines": {

@@ -1,6 +1,6 @@
 [package]
-name = "demoparser2"
-version = "0.1.0"
+name = "counterstrat-demoparser-wasm"
+version.workspace = true
 authors = ["LaihoE"]
 edition = "2018"
 
@@ -24,6 +24,7 @@ wasm-opt = false
 
 
 [dependencies.parser]
+package = "counterstrat-demoparser"
 path = "../parser"
 
 

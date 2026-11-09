@@ -1,3 +1,3 @@
-# `@laihoe/demoparser2-android-arm64`
+# `@counterstrat/demoparser-android-arm64`
 
-This is the **aarch64-linux-android** binary for `@laihoe/demoparser2`
+This is the **aarch64-linux-android** binary for `@counterstrat/demoparser`

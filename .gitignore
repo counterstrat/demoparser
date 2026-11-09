@@ -1,5 +1,10 @@
 target/
 .vscode/
+*.node
+__pycache__/
+*.pyc
+src/wasm/pkg/
+src/wasm/www/pkg/
 venv
 .venv
 flamegraph.svg

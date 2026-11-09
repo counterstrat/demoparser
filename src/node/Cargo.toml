@@ -1,7 +1,7 @@
 [package]
 edition = "2021"
-name = "laihoe_demoparser2"
-version = "0.0.0"
+name = "counterstrat_demoparser"
+version.workspace = true
 
 [lib]
 crate-type = ["cdylib"]
@@ -20,10 +20,8 @@ rayon = "1.10.0"
 [build-dependencies]
 napi-build = "2.0.1"
 
-[profile.release]
-lto = true
-
 [dependencies.parser]
+package = "counterstrat-demoparser"
 path = "../parser"
 
 [dependencies.csgoproto]

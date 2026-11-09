@@ -288,7 +288,7 @@ dependencies = [
 
 [[package]]
 name = "csgoproto"
-version = "0.1.5"
+version = "0.1.0"
 dependencies = [
  "phf",
  "prost",
@@ -298,8 +298,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "demoparser2"
-version = "0.42.0"
+name = "counterstrat-demoparser-python"
+version = "0.1.0"
 dependencies = [
  "ahash",
  "csgoproto",
@@ -307,7 +307,7 @@ dependencies = [
  "ethnum",
  "itertools 0.13.0",
  "memmap2 0.9.9",
- "parser",
+ "counterstrat-demoparser",
  "polars",
  "polars-arrow",
  "protobuf-support",
@@ -788,8 +788,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "parser"
-version = "0.1.1"
+name = "counterstrat-demoparser"
+version = "0.1.0"
 dependencies = [
  "ahash",
  "bit_reverse",

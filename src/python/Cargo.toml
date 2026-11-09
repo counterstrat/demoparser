@@ -1,11 +1,11 @@
 [package]
-name = "demoparser2"
-version = "0.42.1"
+name = "counterstrat-demoparser-python"
+version.workspace = true
 edition = "2021"
 
 
 [lib]
-name = "demoparser2"
+name = "counterstrat_demoparser"
 crate-type = ["cdylib"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -21,11 +21,9 @@ memmap2 = "0.9.4"
 protobuf-support = "3.3.0"
 
 [dependencies.parser]
+package = "counterstrat-demoparser"
 path = "../parser"
 
 [dependencies.csgoproto]
 path = "../csgoproto"
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
-
-[profile.dev]
-overflow-checks = false

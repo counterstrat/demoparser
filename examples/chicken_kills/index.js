@@ -1,4 +1,4 @@
-var {parseEvent} = require('@laihoe/demoparser2');
+var {parseEvent} = require('@counterstrat/demoparser');
 
 
 // make sure your demo has chickens

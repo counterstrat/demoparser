@@ -1,5 +1,5 @@
 // Export-parity guard for the tracked prebuilt binaries (e.g.
-// `demoparser2.linux-x64-gnu.node`).
+// `demoparser.linux-x64-gnu.node`).
 //
 // `index.js` destructures its API from the native binding, so a stale
 // tracked binary (built before a `#[napi]` export was added) yields
