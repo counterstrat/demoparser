@@ -34,3 +34,4 @@ path = "../csgoproto"
 
 # https://github.com/Badel2/wasm-bindgen-file-reader
 wasm-bindgen-file-reader = "1"
+getrandom = { version = "0.3", features = ["wasm_js"] }

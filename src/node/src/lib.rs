@@ -5,10 +5,7 @@ extern crate napi_derive;
 use ahash::AHashMap;
 use memmap2::MmapOptions;
 use napi::bindgen_prelude::*;
-use napi::threadsafe_function::JsValuesTupleIntoVec;
 use napi::Either;
-use napi::JsBigInt;
-use napi::JsUnknown;
 use parser::first_pass::parser_settings::rm_map_user_friendly_names;
 use parser::first_pass::parser_settings::rm_user_friendly_names;
 use parser::first_pass::parser_settings::FirstPassParser;
@@ -32,71 +29,45 @@ pub struct JsVariant(Variant);
 
 impl FromNapiValue for JsVariant {
   unsafe fn from_napi_value(env: sys::napi_env, napi_val: sys::napi_value) -> napi::Result<Self> {
-    let js_unknown = JsUnknown::from_napi_value(env, napi_val)?;
+    let js_unknown = Unknown::from_napi_value(env, napi_val)?;
 
-    match js_unknown.get_type() {
-      Ok(js_unknown_type) => {
-        if js_unknown_type == ValueType::Boolean {
-          if let Ok(val) = js_unknown.coerce_to_bool() {
-            Ok(JsVariant(Variant::Bool(val.get_value()?)))
-          } else {
-            Err(Error::new(
-              Status::InvalidArg,
-              "Unsupported Boolean type for Variant".to_owned(),
-            ))
-          }
-        } else if js_unknown_type == ValueType::String {
-          if let Ok(val) = js_unknown.coerce_to_string() {
-            Ok(JsVariant(Variant::String(val.into_utf8()?.into_owned()?)))
-          } else {
-            Err(Error::new(
-              Status::InvalidArg,
-              "Unsupported String for Variant".to_owned(),
-            ))
-          }
-        } else if js_unknown_type == ValueType::Number {
-          if let Ok(val) = js_unknown.coerce_to_number() {
-            let num = val.get_double()?;
-            if num.fract() == 0.0 {
-              if num >= u8::MIN as f64 && num <= u8::MAX as f64 {
-                Ok(JsVariant(Variant::I32(num as i32)))
-              } else if let Ok(val) = val.get_int32() {
-                let int32_val = val;
-                if int32_val >= i16::MIN as i32 && int32_val <= i16::MAX as i32 {
-                  Ok(JsVariant(Variant::I32(int32_val)))
-                } else {
-                  Ok(JsVariant(Variant::I32(int32_val)))
-                }
-              } else if let Ok(val) = val.get_uint32() {
-                Ok(JsVariant(Variant::U32(val)))
-              } else {
-                Err(Error::new(
-                  Status::InvalidArg,
-                  "Unsupported number type".to_owned(),
-                ))
-              }
-            } else {
-              Ok(JsVariant(Variant::F32(num as f32)))
-            }
+    match js_unknown.get_type()? {
+      ValueType::Boolean => {
+        let val: bool = js_unknown.cast()?;
+        Ok(JsVariant(Variant::Bool(val)))
+      }
+      ValueType::String => {
+        let val: String = js_unknown.cast()?;
+        Ok(JsVariant(Variant::String(val)))
+      }
+      ValueType::Number => {
+        let num: f64 = js_unknown.cast()?;
+        if num.fract() == 0.0 {
+          if num >= u8::MIN as f64 && num <= u8::MAX as f64 {
+            Ok(JsVariant(Variant::I32(num as i32)))
+          } else if num >= i32::MIN as f64 && num <= i32::MAX as f64 {
+            Ok(JsVariant(Variant::I32(num as i32)))
+          } else if num >= u32::MIN as f64 && num <= u32::MAX as f64 {
+            Ok(JsVariant(Variant::U32(num as u32)))
           } else {
             Err(Error::new(
               Status::InvalidArg,
               "Unsupported number type".to_owned(),
             ))
           }
-        } else if js_unknown_type == ValueType::BigInt {
-          let bigint_val = js_unknown.cast::<JsBigInt>();
-          match bigint_val.get_u64() {
-            Ok((val, true)) => Ok(JsVariant(Variant::U64(val))),
-            _ => Err(Error::new(
-              Status::InvalidArg,
-              "Unsupported number type".to_owned(),
-            )),
-          }
+        } else {
+          Ok(JsVariant(Variant::F32(num as f32)))
+        }
+      }
+      ValueType::BigInt => {
+        let bigint_val: BigInt = js_unknown.cast()?;
+        let (signed, val, lossless) = bigint_val.get_u64();
+        if !signed && lossless {
+          Ok(JsVariant(Variant::U64(val)))
         } else {
           Err(Error::new(
             Status::InvalidArg,
-            "Unsupported type for Variant".to_owned(),
+            "Unsupported number type".to_owned(),
           ))
         }
       }
@@ -105,6 +76,35 @@ impl FromNapiValue for JsVariant {
         "Unsupported type for Variant".to_owned(),
       )),
     }
+  }
+}
+
+impl ValidateNapiValue for JsVariant {
+  unsafe fn validate(
+    _env: sys::napi_env,
+    _napi_val: sys::napi_value,
+  ) -> napi::Result<sys::napi_value> {
+    Ok(std::ptr::null_mut())
+  }
+}
+
+impl ToNapiValue for &JsVariant {
+  unsafe fn to_napi_value(
+    env: sys::napi_env,
+    val: Self,
+  ) -> napi::Result<sys::napi_value> {
+    let json = serde_json::to_value(&val.0)
+      .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
+    serde_json::Value::to_napi_value(env, json)
+  }
+}
+
+impl ToNapiValue for &mut JsVariant {
+  unsafe fn to_napi_value(
+    env: sys::napi_env,
+    val: Self,
+  ) -> napi::Result<sys::napi_value> {
+    ToNapiValue::to_napi_value(env, &*val)
   }
 }
 

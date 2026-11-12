@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 src/wasm/pkg/
 src/wasm/www/pkg/
+src/node/wasm/
 venv
 .venv
 flamegraph.svg
@@ -12,3 +13,5 @@ perf.data
 perf.data.old
 junk.txt
 voxels.txt
+src/node/npm/
+node_modules/
