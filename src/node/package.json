@@ -55,13 +55,13 @@
   },
   "scripts": {
     "artifacts": "napi artifacts",
-    "build": "npm run build:wasm && napi build --platform --release --esm && npm run create:npm-dirs",
+    "build": "npm run build:wasm && napi build --platform --release --esm && npm run check:exports && npm run check:wasm && npm run create:npm-dirs",
     "build:debug": "napi build --platform --esm",
     "build:wasm": "cd ../wasm && ./build.sh",
     "check:exports": "node check-exports.js",
     "check:wasm": "node check-wasm-exports.js",
     "create:npm-dirs": "napi create-npm-dirs",
-    "prepublishOnly": "npm run build:wasm && node check-wasm-exports.js && npm run create:npm-dirs && napi prepublish -t npm",
+    "prepublishOnly": "npm run build:wasm && npm run check:exports && npm run check:wasm && npm run create:npm-dirs && napi prepublish -t npm",
     "test": "jest",
     "universal": "napi universalize",
     "version": "napi version"

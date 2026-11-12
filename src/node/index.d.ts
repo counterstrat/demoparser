@@ -11,11 +11,6 @@ export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-was
 
 export declare class JsVariant {}
 
-export declare class WantedPropState {
-  prop: string
-  state: JsVariant
-}
-
 export declare function listGameEvents(pathOrBuf: string | Buffer): any
 
 export declare function listUpdatedFields(pathOrBuf: string | Buffer): any
@@ -57,4 +52,9 @@ export interface VoiceData {
   tick: number
   data: Buffer
   steamid: string
+}
+
+export interface WantedPropState {
+  prop: string
+  state: JsVariant
 }

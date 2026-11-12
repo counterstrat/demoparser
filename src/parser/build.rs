@@ -12,13 +12,14 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let codegen_target_dir = PathBuf::from(manifest_dir).join("../../target/codegen");
+    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let csgoproto_dir = manifest_dir.join("../csgoproto");
+    let codegen_target_dir = manifest_dir.join("../../target/codegen");
     let profile = std::env::var("PROFILE").unwrap_or("debug".to_string());
 
     let mut command = Command::new("cargo");
     command
-        .current_dir("../csgoproto")
+        .current_dir(csgoproto_dir)
         .env("COUNTERSTRAT_CODEGEN", "1")
         .arg("run")
         .arg("--target-dir")
@@ -26,7 +27,12 @@ fn main() -> Result<()> {
     if profile == "release" {
         command.arg("--release");
     }
-    command.status()?;
+    let status = command.status()?;
+    if !status.success() {
+        return Err(std::io::Error::other(format!(
+            "csgoproto codegen failed with {status}"
+        )));
+    }
 
     Ok(())
 }

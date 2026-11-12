@@ -6,7 +6,6 @@ use ahash::AHashMap;
 use memmap2::MmapOptions;
 use napi::bindgen_prelude::*;
 use napi::Either;
-use parser::first_pass::parser_settings::rm_map_user_friendly_names;
 use parser::first_pass::parser_settings::rm_user_friendly_names;
 use parser::first_pass::parser_settings::FirstPassParser;
 use parser::first_pass::parser_settings::ParserInputs;
@@ -81,51 +80,26 @@ impl FromNapiValue for JsVariant {
 
 impl ValidateNapiValue for JsVariant {
   unsafe fn validate(
-    _env: sys::napi_env,
-    _napi_val: sys::napi_value,
-  ) -> napi::Result<sys::napi_value> {
-    Ok(std::ptr::null_mut())
-  }
-}
-
-impl ToNapiValue for &JsVariant {
-  unsafe fn to_napi_value(
     env: sys::napi_env,
-    val: Self,
+    napi_val: sys::napi_value,
   ) -> napi::Result<sys::napi_value> {
-    let json = serde_json::to_value(&val.0)
-      .map_err(|e| Error::new(Status::GenericFailure, e.to_string()))?;
-    serde_json::Value::to_napi_value(env, json)
+    let value_type = Unknown::from_napi_value(env, napi_val)?.get_type()?;
+    match value_type {
+      ValueType::Boolean | ValueType::String | ValueType::Number | ValueType::BigInt => {
+        Ok(std::ptr::null_mut())
+      }
+      _ => Err(Error::new(
+        Status::InvalidArg,
+        "Expected a boolean, string, number, or bigint for a prop state".to_owned(),
+      )),
+    }
   }
 }
 
-impl ToNapiValue for &mut JsVariant {
-  unsafe fn to_napi_value(
-    env: sys::napi_env,
-    val: Self,
-  ) -> napi::Result<sys::napi_value> {
-    ToNapiValue::to_napi_value(env, &*val)
-  }
-}
-
-#[napi]
+#[napi(object)]
 pub struct WantedPropState {
   pub prop: String,
   pub state: JsVariant,
-}
-
-impl FromNapiValue for WantedPropState {
-  unsafe fn from_napi_value(
-    env: sys::napi_env,
-    napi_val: napi::sys::napi_value,
-  ) -> napi::Result<Self> {
-    let obj: Object = Object::from_napi_value(env, napi_val)?;
-
-    let prop: String = obj.get_named_property("prop")?;
-    let state: JsVariant = obj.get_named_property("state")?;
-
-    Ok(WantedPropState { prop, state })
-  }
 }
 
 fn parse_demo(bytes: BytesVariant, parser: &mut Parser) -> Result<DemoOutput, Error> {
@@ -149,7 +123,7 @@ pub struct VoiceData {
 
 #[napi]
 pub fn parse_voice(path_or_buf: Either<String, Buffer>) -> napi::Result<Vec<VoiceData>> {
-  let bytes = resolve_byte_type(path_or_buf).unwrap();
+  let bytes = resolve_byte_type(path_or_buf)?;
   let settings = ParserInputs {
     wanted_players: vec![],
     wanted_player_props: vec![],
@@ -517,12 +491,18 @@ pub fn parse_ticks(
     .into_iter()
     .map(|prop| (prop.prop.clone(), prop.state.0.clone()))
     .collect();
-
-  let real_wanted_prop_states = rm_map_user_friendly_names(&wanted_prop_states);
-  let real_wanted_prop_states = match real_wanted_prop_states {
-    Ok(real_wanted_prop_states) => real_wanted_prop_states,
+  let wanted_prop_state_names: Vec<String> = wanted_prop_states.keys().cloned().collect();
+  let real_wanted_prop_state_names = match rm_user_friendly_names(&wanted_prop_state_names) {
+    Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
   };
+  let mut real_wanted_prop_states: AHashMap<String, Variant> = AHashMap::default();
+  for (real_name, user_friendly_name) in real_wanted_prop_state_names
+    .iter()
+    .zip(&wanted_prop_state_names)
+  {
+    real_wanted_prop_states.insert(real_name.clone(), wanted_prop_states[user_friendly_name].clone());
+  }
 
   let bytes = resolve_byte_type(path_or_buf)?;
   let huf = create_huffman_lookup_table();
@@ -531,9 +511,9 @@ pub fn parse_ticks(
   for (real_name, user_friendly_name) in real_names.iter().zip(&wanted_props) {
     real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
   }
-  for (real_name, user_friendly_name) in real_wanted_prop_states
-    .keys()
-    .zip(wanted_prop_states.keys())
+  for (real_name, user_friendly_name) in real_wanted_prop_state_names
+    .iter()
+    .zip(&wanted_prop_state_names)
   {
     real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
   }

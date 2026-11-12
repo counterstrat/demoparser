@@ -27,5 +27,15 @@ import init, { parseEvent, parseTicks } from './wasm/demoparser.js';
 await init();
 ```
 
-The export-parity guards run with `node check-exports.js` and
-`node check-wasm-exports.js`.
+`npm run build` finishes by running both export-parity guards
+(`node check-exports.js` and `node check-wasm-exports.js`).
+
+## Packaging
+
+The platform `.node` binaries are not part of the root tarball. `npm publish`
+runs `prepublishOnly`, which verifies both entries and then calls
+`napi prepublish` to copy binaries into the generated per-triple packages and
+add them as `optionalDependencies`. Run `npm run build` (or `napi artifacts`
+in CI) first so the local binding and `wasm/` output exist. `npm pack` without
+that prepublish path produces a tarball with no binaries and no
+`optionalDependencies`, so use it only to inspect file contents.

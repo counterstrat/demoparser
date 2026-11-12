@@ -773,9 +773,8 @@ if (
   }
 }
 
-const { JsVariant, WantedPropState, listGameEvents, listUpdatedFields, parseEvent, parseEvents, parseGrenades, parseHeader, parsePlayerInfo, parsePlayerSkins, parseTickRange, parseTicks, parseVoice } = nativeBinding
+const { JsVariant, listGameEvents, listUpdatedFields, parseEvent, parseEvents, parseGrenades, parseHeader, parsePlayerInfo, parsePlayerSkins, parseTickRange, parseTicks, parseVoice } = nativeBinding
 export { JsVariant }
-export { WantedPropState }
 export { listGameEvents }
 export { listUpdatedFields }
 export { parseEvent }
