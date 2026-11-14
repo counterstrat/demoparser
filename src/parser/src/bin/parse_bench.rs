@@ -4,9 +4,9 @@
 //!
 //! Usage: parse_bench <demo.dem> [iters=5] [mode=both|st|mt]
 
-use parser::first_pass::parser_settings::{rm_user_friendly_names, ParserInputs};
-use parser::parse_demo::{DemoOutput, Parser, ParsingMode};
-use parser::second_pass::parser_settings::create_huffman_lookup_table;
+use counterstrat_demoparser::first_pass::parser_settings::{rm_user_friendly_names, ParserInputs};
+use counterstrat_demoparser::parse_demo::{DemoOutput, Parser, ParsingMode};
+use counterstrat_demoparser::second_pass::parser_settings::create_huffman_lookup_table;
 use ahash::AHashMap;
 use memmap2::MmapOptions;
 use std::env;
@@ -35,11 +35,10 @@ fn settings<'a>(huf: &'a Vec<(u8, u8)>) -> ParserInputs<'a> {
     // (ticks AND events in one pass); default measures decode+events.
     let unified = std::env::var("CS2_BOTH").is_ok();
     let ticks_only = std::env::var("CS2_TICKS").is_ok();
-    let wanted_events = if ticks_only && !unified {
-        vec![]
-    } else {
-        vec!["all".to_string()]
-    };
+    let mut wanted_events = Vec::<String>::new();
+    if !(ticks_only && !unified) {
+        wanted_events.push("all".to_string());
+    }
     let collect_ticks = ticks_only || unified;
     settings_with(huf, wanted_events, collect_ticks)
 }
@@ -180,8 +179,8 @@ fn round_bounds(mmap: &[u8], huf: &Vec<(u8, u8)>) -> Vec<(i32, i32)> {
 /// boundaries, then one bounded `parse_tick_range` per round. Reports total
 /// wall + rows, comparable against a full `parse_ticks` (CS2_TICKS=1).
 fn run_once_pattern(mmap: &[u8], huf: &Vec<(u8, u8)>) -> f64 {
-    use parser::first_pass::prop_controller::TICK_ID;
-    use parser::second_pass::variants::VarVec;
+    use counterstrat_demoparser::first_pass::prop_controller::TICK_ID;
+    use counterstrat_demoparser::second_pass::variants::VarVec;
     let t = Instant::now();
     // Phase 1: round boundaries (events only, no tick columns).
     let bounds = round_bounds(mmap, huf);
@@ -207,8 +206,8 @@ fn run_once_pattern(mmap: &[u8], huf: &Vec<(u8, u8)>) -> f64 {
 /// (each segment decoded once, event post-proc once). Must yield the same
 /// rows as the per-range pattern with less wall.
 fn run_once_ranges(mmap: &[u8], huf: &Vec<(u8, u8)>) -> f64 {
-    use parser::first_pass::prop_controller::TICK_ID;
-    use parser::second_pass::variants::VarVec;
+    use counterstrat_demoparser::first_pass::prop_controller::TICK_ID;
+    use counterstrat_demoparser::second_pass::variants::VarVec;
     let t = Instant::now();
     let bounds = round_bounds(mmap, huf);
     let mut ticks_settings = settings_with(huf, vec![], true);
@@ -255,8 +254,8 @@ fn run_once_ranges(mmap: &[u8], huf: &Vec<(u8, u8)>) -> f64 {
 /// Tick-range proof: parse only overlapping segments, verify every emitted
 /// row/event tick falls inside `[lo, hi]`.
 fn run_once_range(mmap: &[u8], huf: &Vec<(u8, u8)>, lo: i32, hi: i32) -> f64 {
-    use parser::first_pass::prop_controller::TICK_ID;
-    use parser::second_pass::variants::VarVec;
+    use counterstrat_demoparser::first_pass::prop_controller::TICK_ID;
+    use counterstrat_demoparser::second_pass::variants::VarVec;
     let parser = Parser::new(settings(huf), ParsingMode::ForceMultiThreaded);
     let t = Instant::now();
     let shared = parser.preparse(mmap).expect("preparse");
