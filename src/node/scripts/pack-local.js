@@ -13,7 +13,14 @@ import { fileURLToPath } from 'node:url'
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const demoPath = resolve(packageDir, '..', 'parser', 'test_demo.dem')
 
+const npmExecPath = process.env.npm_execpath
+if (!npmExecPath) {
+  throw new Error('`npm_execpath` is not set. Run this script with `npm run pack:local`.')
+}
+
 const npmDir = join(packageDir, 'npm')
+
+const runNpm = (args, options) => execFileSync(process.execPath, [npmExecPath, ...args], options)
 
 const platformArchABI = () => {
   const arch = process.arch
@@ -72,8 +79,7 @@ mkdirSync(distDir, { recursive: true })
 const appDir = mkdtempSync(join(tmpdir(), 'demoparser-install-'))
 
 const pack = (cwd) => {
-  const output = execFileSync(
-    'npm',
+  const output = runNpm(
     ['pack', '--ignore-scripts', '--json', '--pack-destination', distDir],
     { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }
   )
@@ -92,8 +98,7 @@ try {
     join(appDir, 'package.json'),
     `${JSON.stringify({ name: 'demoparser-install-smoke', private: true, type: 'module' }, null, 2)}\n`
   )
-  execFileSync(
-    'npm',
+  runNpm(
     [
       'install',
       '--ignore-scripts',
