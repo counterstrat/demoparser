@@ -405,6 +405,9 @@ C#: https://github.com/saul/demofile-net
 Python: https://github.com/pnxenopoulos/awpy  
 Java: https://github.com/skadistats/clarity  
 
+## Contact
+Questions or support: [Discord](https://discord.gg/J357yksPnP).
+
 ## Acknowledgements
 Without Dotabuff's dota 2 parser "manta" this would not have been possible. Check it out: https://github.com/dotabuff/manta
 
