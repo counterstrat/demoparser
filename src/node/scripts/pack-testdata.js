@@ -13,12 +13,34 @@ if (!existsSync(header)) {
   process.exit(1)
 }
 
+const expectedFiles = new Set([
+  'eventWithProps.json',
+  'eventsWithProps.json',
+  'grenades.json',
+  'header.json',
+  'list_game_events.json',
+  'player_info.json'
+])
+const expectedDirs = ['per_event/', 'per_prop/']
+
 const files = []
 const walk = (dir) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === '.extracted') continue
     const full = join(dir, entry.name)
-    if (entry.isDirectory()) walk(full)
-    else if (entry.name.endsWith('.json')) files.push(relative(dataDir, full).split(sep).join('/'))
+    if (entry.isDirectory()) {
+      walk(full)
+    } else if (entry.name.endsWith('.json')) {
+      const relativePath = relative(dataDir, full).split(sep).join('/')
+      if (
+        !expectedFiles.has(relativePath) &&
+        !expectedDirs.some((prefix) => relativePath.startsWith(prefix))
+      ) {
+        console.error(`Unexpected fixture file: ${relativePath}`)
+        process.exit(1)
+      }
+      files.push(relativePath)
+    }
   }
 }
 walk(dataDir)
