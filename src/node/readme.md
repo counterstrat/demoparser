@@ -64,15 +64,29 @@ npm run build:wasm   # WASM only
 ### Test
 
 ```sh
-npm test              # node --test prop-states suite, then jest
+npm test              # node --test tests/**/*.test.js
 npm run check:exports # native entry/type/binary parity
 npm run check:wasm    # WASM glue/type/adapter parity
 npm run pack:local    # tarballs into dist/, then smoke-install both
 ```
 
 `npm test` and `pack:local` need a built native binding (`npm run build`).
-Jest also needs `tests/data/` (unzip `tests/zipped_testdata.zip`) and
-`../python/tests/test.dem`, a gitignored demo that a fresh clone must provision.
+
+The tests use the tracked `src/parser/test_demo.dem` demo. JSON expectations
+live in `src/node/tests/testdata.json.br`, a brotli-compressed map of relative
+fixture paths to compact JSON. Extract it once into the gitignored
+`tests/data/` before running tests:
+
+```sh
+node scripts/extract-testdata.js
+```
+
+Re-run that command after changing the blob. CI runs the same command before
+`npm test`. If `tests/data/header.json` is missing, `parser.test.js` throws an
+error with the same instruction before running any parser test.
+
+To refresh the blob after changing expectations, run `npm run pack:testdata`
+and commit the updated `src/node/tests/testdata.json.br`.
 
 ## Packaging
 
