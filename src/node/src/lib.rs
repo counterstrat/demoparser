@@ -5,11 +5,7 @@ extern crate napi_derive;
 use ahash::AHashMap;
 use memmap2::MmapOptions;
 use napi::bindgen_prelude::*;
-use napi::threadsafe_function::JsValuesTupleIntoVec;
 use napi::Either;
-use napi::JsBigInt;
-use napi::JsUnknown;
-use parser::first_pass::parser_settings::rm_map_user_friendly_names;
 use parser::first_pass::parser_settings::rm_user_friendly_names;
 use parser::first_pass::parser_settings::FirstPassParser;
 use parser::first_pass::parser_settings::ParserInputs;
@@ -22,6 +18,7 @@ use parser::second_pass::variants::OutputSerdeHelperStruct;
 use parser::second_pass::variants::Variant;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::File;
 use std::hash::RandomState;
 use std::result::Result;
@@ -32,71 +29,49 @@ pub struct JsVariant(Variant);
 
 impl FromNapiValue for JsVariant {
   unsafe fn from_napi_value(env: sys::napi_env, napi_val: sys::napi_value) -> napi::Result<Self> {
-    let js_unknown = JsUnknown::from_napi_value(env, napi_val)?;
+    let js_unknown = Unknown::from_napi_value(env, napi_val)?;
 
-    match js_unknown.get_type() {
-      Ok(js_unknown_type) => {
-        if js_unknown_type == ValueType::Boolean {
-          if let Ok(val) = js_unknown.coerce_to_bool() {
-            Ok(JsVariant(Variant::Bool(val.get_value()?)))
+    match js_unknown.get_type()? {
+      ValueType::Boolean => {
+        let val: bool = js_unknown.cast()?;
+        Ok(JsVariant(Variant::Bool(val)))
+      }
+      ValueType::String => {
+        let val: String = js_unknown.cast()?;
+        Ok(JsVariant(Variant::String(val)))
+      }
+      ValueType::Number => {
+        let num: f64 = js_unknown.cast()?;
+        if !num.is_finite() {
+          return Err(Error::new(
+            Status::InvalidArg,
+            "Prop state numbers must be finite".to_owned(),
+          ));
+        }
+        if num.fract() == 0.0 {
+          if num >= i32::MIN as f64 && num <= i32::MAX as f64 {
+            Ok(JsVariant(Variant::I32(num as i32)))
+          } else if num >= u32::MIN as f64 && num <= u32::MAX as f64 {
+            Ok(JsVariant(Variant::U32(num as u32)))
           } else {
             Err(Error::new(
               Status::InvalidArg,
-              "Unsupported Boolean type for Variant".to_owned(),
+              "Integer prop states above u32::MAX must be passed as BigInt".to_owned(),
             ))
           }
-        } else if js_unknown_type == ValueType::String {
-          if let Ok(val) = js_unknown.coerce_to_string() {
-            Ok(JsVariant(Variant::String(val.into_utf8()?.into_owned()?)))
-          } else {
-            Err(Error::new(
-              Status::InvalidArg,
-              "Unsupported String for Variant".to_owned(),
-            ))
-          }
-        } else if js_unknown_type == ValueType::Number {
-          if let Ok(val) = js_unknown.coerce_to_number() {
-            let num = val.get_double()?;
-            if num.fract() == 0.0 {
-              if num >= u8::MIN as f64 && num <= u8::MAX as f64 {
-                Ok(JsVariant(Variant::I32(num as i32)))
-              } else if let Ok(val) = val.get_int32() {
-                let int32_val = val;
-                if int32_val >= i16::MIN as i32 && int32_val <= i16::MAX as i32 {
-                  Ok(JsVariant(Variant::I32(int32_val)))
-                } else {
-                  Ok(JsVariant(Variant::I32(int32_val)))
-                }
-              } else if let Ok(val) = val.get_uint32() {
-                Ok(JsVariant(Variant::U32(val)))
-              } else {
-                Err(Error::new(
-                  Status::InvalidArg,
-                  "Unsupported number type".to_owned(),
-                ))
-              }
-            } else {
-              Ok(JsVariant(Variant::F32(num as f32)))
-            }
-          } else {
-            Err(Error::new(
-              Status::InvalidArg,
-              "Unsupported number type".to_owned(),
-            ))
-          }
-        } else if js_unknown_type == ValueType::BigInt {
-          let bigint_val = js_unknown.cast::<JsBigInt>();
-          match bigint_val.get_u64() {
-            Ok((val, true)) => Ok(JsVariant(Variant::U64(val))),
-            _ => Err(Error::new(
-              Status::InvalidArg,
-              "Unsupported number type".to_owned(),
-            )),
-          }
+        } else {
+          Ok(JsVariant(Variant::F32(num as f32)))
+        }
+      }
+      ValueType::BigInt => {
+        let bigint_val: BigInt = js_unknown.cast()?;
+        let (signed, val, lossless) = bigint_val.get_u64();
+        if !signed && lossless {
+          Ok(JsVariant(Variant::U64(val)))
         } else {
           Err(Error::new(
             Status::InvalidArg,
-            "Unsupported type for Variant".to_owned(),
+            "Unsupported number type".to_owned(),
           ))
         }
       }
@@ -108,24 +83,28 @@ impl FromNapiValue for JsVariant {
   }
 }
 
-#[napi]
+impl ValidateNapiValue for JsVariant {
+  unsafe fn validate(
+    env: sys::napi_env,
+    napi_val: sys::napi_value,
+  ) -> napi::Result<sys::napi_value> {
+    let value_type = Unknown::from_napi_value(env, napi_val)?.get_type()?;
+    match value_type {
+      ValueType::Boolean | ValueType::String | ValueType::Number | ValueType::BigInt => {
+        Ok(std::ptr::null_mut())
+      }
+      _ => Err(Error::new(
+        Status::InvalidArg,
+        "Expected a boolean, string, number, or bigint for a prop state".to_owned(),
+      )),
+    }
+  }
+}
+
+#[napi(object)]
 pub struct WantedPropState {
   pub prop: String,
   pub state: JsVariant,
-}
-
-impl FromNapiValue for WantedPropState {
-  unsafe fn from_napi_value(
-    env: sys::napi_env,
-    napi_val: napi::sys::napi_value,
-  ) -> napi::Result<Self> {
-    let obj: Object = Object::from_napi_value(env, napi_val)?;
-
-    let prop: String = obj.get_named_property("prop")?;
-    let state: JsVariant = obj.get_named_property("state")?;
-
-    Ok(WantedPropState { prop, state })
-  }
 }
 
 fn parse_demo(bytes: BytesVariant, parser: &mut Parser) -> Result<DemoOutput, Error> {
@@ -149,7 +128,7 @@ pub struct VoiceData {
 
 #[napi]
 pub fn parse_voice(path_or_buf: Either<String, Buffer>) -> napi::Result<Vec<VoiceData>> {
-  let bytes = resolve_byte_type(path_or_buf).unwrap();
+  let bytes = resolve_byte_type(path_or_buf)?;
   let settings = ParserInputs {
     wanted_players: vec![],
     wanted_player_props: vec![],
@@ -512,17 +491,49 @@ pub fn parse_ticks(
     Some(v) => v.iter().map(|x| x.parse::<u64>().unwrap_or(0)).collect(),
     None => vec![],
   };
+  let prop_states = prop_states.unwrap_or_default();
+  let mut seen_prop_states = HashSet::new();
+  for prop in &prop_states {
+    if !seen_prop_states.insert(prop.prop.clone()) {
+      return Err(Error::new(
+        Status::InvalidArg,
+        format!("Duplicate prop state for `{}`", prop.prop),
+      ));
+    }
+  }
   let wanted_prop_states: AHashMap<String, Variant> = prop_states
-    .unwrap_or_default()
     .into_iter()
-    .map(|prop| (prop.prop.clone(), prop.state.0.clone()))
+    .map(|prop| (prop.prop, prop.state.0))
     .collect();
-
-  let real_wanted_prop_states = rm_map_user_friendly_names(&wanted_prop_states);
-  let real_wanted_prop_states = match real_wanted_prop_states {
-    Ok(real_wanted_prop_states) => real_wanted_prop_states,
+  let wanted_prop_state_names: Vec<String> = wanted_prop_states.keys().cloned().collect();
+  // Node strips the `Weapon.` and `Grenade.` prefixes before the friendly-name
+  // lookup, unlike the Python binding. Python is frozen, so keep this behavior.
+  let real_wanted_prop_state_names = match rm_user_friendly_names(&wanted_prop_state_names) {
+    Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
   };
+  let mut seen_real_prop_state_names = HashSet::new();
+  for real_name in &real_wanted_prop_state_names {
+    if !seen_real_prop_state_names.insert(real_name.clone()) {
+      return Err(Error::new(
+        Status::InvalidArg,
+        format!("Multiple prop states resolve to the same real name `{}`", real_name),
+      ));
+    }
+  }
+  let mut real_wanted_prop_states: AHashMap<String, Variant> = AHashMap::default();
+  for (real_name, user_friendly_name) in real_wanted_prop_state_names
+    .iter()
+    .zip(&wanted_prop_state_names)
+  {
+    let Some(state) = wanted_prop_states.get(user_friendly_name) else {
+      return Err(Error::new(
+        Status::InvalidArg,
+        format!("Missing prop state for `{}`", user_friendly_name),
+      ));
+    };
+    real_wanted_prop_states.insert(real_name.clone(), state.clone());
+  }
 
   let bytes = resolve_byte_type(path_or_buf)?;
   let huf = create_huffman_lookup_table();
@@ -531,9 +542,9 @@ pub fn parse_ticks(
   for (real_name, user_friendly_name) in real_names.iter().zip(&wanted_props) {
     real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
   }
-  for (real_name, user_friendly_name) in real_wanted_prop_states
-    .keys()
-    .zip(wanted_prop_states.keys())
+  for (real_name, user_friendly_name) in real_wanted_prop_state_names
+    .iter()
+    .zip(&wanted_prop_state_names)
   {
     real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
   }

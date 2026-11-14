@@ -86,22 +86,16 @@ impl<'a> SecondPassParser<'a> {
         if self.range_routing.is_some() {
             return self.collect_entities_ranged();
         }
+        // A tick is kept only when every player matches every wanted prop
+        // state; decide before writing any row so filtered ticks emit none.
+        for (entity_id, player) in &self.players {
+            if !self.wanted_prop_states_match(entity_id, player) {
+                return;
+            }
+        }
         // iterate every player and every wanted prop name
         // if either one is missing then push None to output
         for (entity_id, player) in &self.players {
-            // iterate every wanted prop state
-            // if any prop's state for this tick is not the wanted state, dont extract info from tick
-            for wanted_prop_state_info in &self.prop_controller.wanted_prop_state_infos {
-                match self.find_prop(&wanted_prop_state_info.base, entity_id, player) {
-                    Ok(prop) => {
-                        if prop != wanted_prop_state_info.wanted_prop_state {
-                            return;
-                        }
-                    }
-                    Err(_e) => return,
-                }
-            }
-
             // Player-constant work hoisted out of the per-prop loop: steamid, the wanted-player
             // filter (same verdict for every prop -> skip the whole player), and the df_per_player
             // bucket init. Behaviour-identical to the per-prop version.
@@ -166,17 +160,11 @@ impl<'a> SecondPassParser<'a> {
             return;
         };
         for (entity_id, player) in &self.players {
-            for wanted_prop_state_info in &self.prop_controller.wanted_prop_state_infos {
-                match self.find_prop(&wanted_prop_state_info.base, entity_id, player) {
-                    Ok(prop) => {
-                        if prop != wanted_prop_state_info.wanted_prop_state {
-                            return;
-                        }
-                    }
-                    Err(_e) => return,
-                }
+            if !self.wanted_prop_states_match(entity_id, player) {
+                return;
             }
-
+        }
+        for (entity_id, player) in &self.players {
             let player_steamid = player.steamid.unwrap_or(0);
             if !self.wanted_players.is_empty() && !self.wanted_players.contains(&player_steamid) {
                 continue;
@@ -213,6 +201,16 @@ impl<'a> SecondPassParser<'a> {
         if self.prop_controller.needs_velocity {
             self.update_velocity_history();
         }
+    }
+
+    fn wanted_prop_states_match(&self, entity_id: &i32, player: &PlayerMetaData) -> bool {
+        self.prop_controller
+            .wanted_prop_state_infos
+            .iter()
+            .all(|info| match self.find_prop(&info.base, entity_id, player) {
+                Ok(prop) => prop.state_matches(&info.wanted_prop_state),
+                Err(_) => false,
+            })
     }
 
     #[inline(always)]
@@ -762,16 +760,9 @@ impl<'a> SecondPassParser<'a> {
     pub fn update_velocity_history(&mut self) {
         // Same player selection as the main collection loop: first the prop-state
         // filter (which cancels the whole tick), then wanted_players.
-        for wanted_prop_state_info in &self.prop_controller.wanted_prop_state_infos {
-            for (entity_id, player) in &self.players {
-                match self.find_prop(&wanted_prop_state_info.base, entity_id, player) {
-                    Ok(prop) => {
-                        if prop != wanted_prop_state_info.wanted_prop_state {
-                            return;
-                        }
-                    }
-                    Err(_e) => return,
-                }
+        for (entity_id, player) in &self.players {
+            if !self.wanted_prop_states_match(entity_id, player) {
+                return;
             }
         }
         let mut updates: Vec<(u64, Option<[f32; 3]>)> = Vec::with_capacity(self.players.len());

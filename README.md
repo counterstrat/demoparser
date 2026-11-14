@@ -13,7 +13,9 @@ The parser takes a slightly different approach to exposing the information in th
 ### Install
 Python: ```pip install counterstrat-demoparser``` (python >= 3.8)
 
-NodeJS: ```npm i @counterstrat/demoparser```
+NodeJS: ```npm i @counterstrat/demoparser``` (node >= 22, ESM-only)
+
+The same package ships a WASM build for browsers, edge runtimes, and Node at the `./wasm` subpath.
 
 
 ### Getting started
@@ -26,12 +28,50 @@ event_df = parser.parse_event("player_death", player=["X", "Y"], other=["total_r
 ticks_df = parser.parse_ticks(["X", "Y"])
 ```
 #### NodeJS
+The package is ESM-only.
+
 ```JavaScript
-var {parseEvent, parseTicks} = require('@counterstrat/demoparser');
+import { parseEvent, parseTicks } from '@counterstrat/demoparser';
 
 let event_json = parseEvent("path_to_demo.dem", "player_death", ["X", "Y"], ["total_rounds_played"])
 let ticks_json = parseTicks("path_to_demo.dem", ["X", "Y"])
 ```
+
+#### WASM (Node, browsers, and edge runtimes)
+The `./wasm` subpath takes the demo bytes instead of a file path, so load or fetch the demo yourself. It has no Node builtins and never touches the filesystem. The WASM build does not support `propStates`; that filter is native-only.
+
+In Node the wasm module initializes itself, so the import is the same as any other module:
+
+```JavaScript
+import { parseEvent, parseTicks } from '@counterstrat/demoparser/wasm'
+
+const bytes = new Uint8Array(await (await fetch('path_to_demo.dem')).arrayBuffer())
+let event_json = parseEvent(bytes, 'player_death', ['X', 'Y'], ['total_rounds_played'])
+let ticks_json = parseTicks(bytes, ['X', 'Y'])
+```
+
+Browsers, bundlers, and edge runtimes use the wasm-bindgen `web` build, which needs one async init before the first call. The default export is the init function only; the API is the named exports. Bundlers that understand `new URL(..., import.meta.url)` (Vite, webpack 5, Rollup) pick up the `.wasm` asset automatically:
+
+```JavaScript
+import init, { parseEvent, parseTicks } from '@counterstrat/demoparser/wasm'
+
+await init()
+
+const bytes = new Uint8Array(await (await fetch('path_to_demo.dem')).arrayBuffer())
+let event_json = parseEvent(bytes, 'player_death', ['X', 'Y'], ['total_rounds_played'])
+```
+
+For direct in-browser use with no bundler, serve the package files and import the `web` entrypoint from a module script (or map the bare specifier with an import map):
+
+```html
+<script type="module">
+  import init, { parseEvent } from '/node_modules/@counterstrat/demoparser/wasm/demoparser.js'
+
+  await init()
+</script>
+```
+
+The WASM output is generated, not checked in. Build it with `npm run build:wasm` from `src/node/` (requires `wasm-pack` and the `wasm32-unknown-unknown` Rust target).
 
 ### Examples in Python and JavaScript
 - [Examples](./examples)

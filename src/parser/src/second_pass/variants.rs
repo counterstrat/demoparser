@@ -25,6 +25,30 @@ pub enum Variant {
     InputHistory(Vec<InputHistory>),
     UserCmdSubtickMoves(Vec<UserCmdSubtickMove>),
 }
+
+impl Variant {
+    pub fn state_matches(&self, wanted: &Variant) -> bool {
+        if self == wanted {
+            return true;
+        }
+        match (self, wanted) {
+            (Variant::I32(actual), Variant::U32(wanted)) => *actual >= 0 && *actual as u32 == *wanted,
+            (Variant::U32(actual), Variant::I32(wanted)) => *wanted >= 0 && *actual == *wanted as u32,
+            (Variant::I32(actual), Variant::U64(wanted)) => *actual >= 0 && *actual as u64 == *wanted,
+            (Variant::U64(actual), Variant::I32(wanted)) => *wanted >= 0 && *actual == *wanted as u64,
+            (Variant::U32(actual), Variant::U64(wanted)) => *actual as u64 == *wanted,
+            (Variant::U64(actual), Variant::U32(wanted)) => *actual == *wanted as u64,
+            (Variant::F32(actual), Variant::I32(wanted)) => *actual as f64 == *wanted as f64,
+            (Variant::I32(actual), Variant::F32(wanted)) => *actual as f64 == *wanted as f64,
+            (Variant::F32(actual), Variant::U32(wanted)) => *actual as f64 == *wanted as f64,
+            (Variant::U32(actual), Variant::F32(wanted)) => *actual as f64 == *wanted as f64,
+            (Variant::F32(actual), Variant::U64(wanted)) => *actual as f64 == *wanted as f64,
+            (Variant::U64(actual), Variant::F32(wanted)) => *actual as f64 == *wanted as f64,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Sticker {
     pub name: String,
@@ -969,6 +993,23 @@ impl Serialize for OutputSerdeHelperStruct {
 mod tests {
     use super::*;
     use crate::second_pass::collect_data::PropType;
+
+    #[test]
+    fn state_matches_compares_numbers_across_variants() {
+        assert!(Variant::U32(3).state_matches(&Variant::I32(3)));
+        assert!(Variant::I32(3).state_matches(&Variant::U32(3)));
+        assert!(Variant::U64(3).state_matches(&Variant::U32(3)));
+        assert!(Variant::U32(3).state_matches(&Variant::U64(3)));
+        assert!(Variant::F32(71.0).state_matches(&Variant::I32(71)));
+        assert!(Variant::F32(71.0).state_matches(&Variant::U64(71)));
+        assert!(Variant::I32(71).state_matches(&Variant::F32(71.0)));
+        assert!(!Variant::U32(3).state_matches(&Variant::I32(-1)));
+        assert!(!Variant::I32(-1).state_matches(&Variant::U32(1)));
+        assert!(!Variant::I32(2).state_matches(&Variant::U32(3)));
+        assert!(!Variant::F32(71.5).state_matches(&Variant::I32(71)));
+        assert!(!Variant::Bool(true).state_matches(&Variant::I32(1)));
+        assert!(!Variant::String("CT".to_string()).state_matches(&Variant::String("T".to_string())));
+    }
 
     fn prop_info(id: u32, name: &str) -> PropInfo {
         PropInfo {

@@ -4,7 +4,8 @@ target/
 __pycache__/
 *.pyc
 src/wasm/pkg/
-src/wasm/www/pkg/
+src/node/wasm/
+src/node/index.cjs
 venv
 .venv
 flamegraph.svg
@@ -12,3 +13,6 @@ perf.data
 perf.data.old
 junk.txt
 voxels.txt
+src/node/npm/
+src/node/dist/
+node_modules/

@@ -1,45 +1,81 @@
 {
   "name": "@counterstrat/demoparser",
   "version": "0.1.0",
-  "main": "index.js",
-  "types": "index.d.ts",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./wasm": {
+      "types": "./wasm/demoparser.d.ts",
+      "node": "./wasm-node.js",
+      "default": "./wasm/demoparser.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "wasm-node.js",
+    "wasm/"
+  ],
   "napi": {
-    "name": "demoparser",
-    "triples": {
-      "additional": [
-        "aarch64-apple-darwin",
-        "aarch64-linux-android",
-        "aarch64-unknown-linux-gnu",
-        "aarch64-unknown-linux-musl",
-        "aarch64-pc-windows-msvc",
-        "armv7-unknown-linux-gnueabihf",
-        "x86_64-unknown-linux-musl",
-        "x86_64-unknown-freebsd",
-        "i686-pc-windows-msvc",
-        "armv7-linux-androideabi",
-        "universal-apple-darwin"
-      ]
-    }
+    "binaryName": "demoparser",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "aarch64-linux-android",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-unknown-linux-musl",
+      "aarch64-pc-windows-msvc",
+      "armv7-unknown-linux-gnueabihf",
+      "x86_64-unknown-linux-musl",
+      "x86_64-unknown-freebsd",
+      "i686-pc-windows-msvc",
+      "armv7-linux-androideabi",
+      "universal-apple-darwin"
+    ]
   },
   "license": "MIT",
   "devDependencies": {
-    "@napi-rs/cli": "^2.16.1",
+    "@napi-rs/cli": "^3.10.12",
     "ava": "^5.1.1",
     "jest": "^29.7.0"
   },
   "ava": {
     "timeout": "3m"
   },
+  "jest": {
+    "transform": {},
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "prop-states\\.test\\.js$"
+    ]
+  },
   "engines": {
-    "node": ">= 10"
+    "node": ">= 22"
   },
   "scripts": {
     "artifacts": "napi artifacts",
-    "build": "napi build --platform --release",
-    "build:debug": "napi build --platform",
-    "prepublishOnly": "napi prepublish -t npm",
-    "test": "jest",
-    "universal": "napi universal",
+    "build": "npm run build:wasm && npm run build:native && npm run check:exports && npm run check:wasm && npm run create:npm-dirs",
+    "build:debug": "napi build --platform --esm",
+    "build:native": "napi build --platform --release --esm",
+    "build:wasm": "cd ../wasm && ./build.sh",
+    "check:exports": "node check-exports.js",
+    "check:wasm": "node check-wasm-exports.js",
+    "create:npm-dirs": "napi create-npm-dirs",
+    "prepack": "npm run build:wasm && npm run build:native && npm run check:exports && npm run check:wasm",
+    "prepublishOnly": "npm run create:npm-dirs && napi prepublish -t npm",
+    "test": "npm run test:prop-states && npm run test:jest",
+    "pack:local": "node scripts/pack-local.js",
+    "test:jest": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:prop-states": "node --test tests/prop-states.test.js",
+    "universal": "napi universalize",
     "version": "napi version"
   }
 }
