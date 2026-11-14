@@ -50,19 +50,29 @@
   "ava": {
     "timeout": "3m"
   },
+  "jest": {
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "prop-states\\.test\\.js$"
+    ]
+  },
   "engines": {
     "node": ">= 22"
   },
   "scripts": {
     "artifacts": "napi artifacts",
-    "build": "npm run build:wasm && napi build --platform --release --esm && npm run check:exports && npm run check:wasm && npm run create:npm-dirs",
+    "build": "npm run build:wasm && npm run build:native && npm run check:exports && npm run check:wasm && npm run create:npm-dirs",
     "build:debug": "napi build --platform --esm",
+    "build:native": "napi build --platform --release --esm",
     "build:wasm": "cd ../wasm && ./build.sh",
     "check:exports": "node check-exports.js",
     "check:wasm": "node check-wasm-exports.js",
     "create:npm-dirs": "napi create-npm-dirs",
-    "prepublishOnly": "npm run build:wasm && npm run check:exports && npm run check:wasm && npm run create:npm-dirs && napi prepublish -t npm",
-    "test": "jest",
+    "prepack": "npm run build:wasm && npm run build:native && npm run check:exports && npm run check:wasm",
+    "prepublishOnly": "npm run create:npm-dirs && napi prepublish -t npm",
+    "test": "npm run test:prop-states && npm run test:jest",
+    "test:jest": "jest",
+    "test:prop-states": "node --test tests/prop-states.test.js",
     "universal": "napi universalize",
     "version": "napi version"
   }

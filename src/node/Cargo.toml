@@ -18,7 +18,10 @@ itertools = "0.12.1"
 rayon = "1.10.0"
 
 [build-dependencies]
-# napi-build has no published, non-yanked 3.x yet; napi 3 uses the 2.x build crate.
+# napi-build has no stable 3.x on crates.io; 3.0.0-beta.0 is yanked.
+# https://crates.io/crates/napi-build/versions
+# The napi 3 migration guide baseline resolves through this 2.6.x line:
+# https://napi.rs/docs/more/v2-v3-migration-guide
 napi-build = "2.6.0"
 
 [dependencies.parser]

@@ -2,7 +2,12 @@ use std::path::PathBuf;
 use std::{io::Result, process::Command};
 
 fn main() -> Result<()> {
-    println!("cargo::rerun-if-changed=../csgoproto/src/protobuf.rs");
+    println!("cargo::rerun-if-changed=../csgoproto/src/main.rs");
+    println!("cargo::rerun-if-changed=../csgoproto/src/parser.rs");
+    println!("cargo::rerun-if-changed=../csgoproto/src/lib.rs");
+    println!("cargo::rerun-if-changed=../csgoproto/Cargo.toml");
+    println!("cargo::rerun-if-changed=../csgoproto/GameTracking-CS2/Protobufs");
+    println!("cargo::rerun-if-changed=../csgoproto/GameTracking-CS2/game/csgo/pak01_dir/scripts/items/items_game.txt");
     println!("cargo::rerun-if-changed=../csgoproto/GameTracking-CS2/game/csgo/pak01_dir/resource/csgo_english.txt");
 
     // Codegen depends on `parser`, so running it inside this build script
@@ -22,6 +27,8 @@ fn main() -> Result<()> {
         .current_dir(csgoproto_dir)
         .env("COUNTERSTRAT_CODEGEN", "1")
         .arg("run")
+        .arg("--quiet")
+        .arg("--locked")
         .arg("--target-dir")
         .arg(codegen_target_dir);
     if profile == "release" {

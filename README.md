@@ -38,7 +38,7 @@ let ticks_json = parseTicks("path_to_demo.dem", ["X", "Y"])
 ```
 
 #### WASM (Node, browsers, and edge runtimes)
-The `./wasm` subpath takes the demo bytes instead of a file path, so load or fetch the demo yourself. It has no Node builtins and never touches the filesystem.
+The `./wasm` subpath takes the demo bytes instead of a file path, so load or fetch the demo yourself. It has no Node builtins and never touches the filesystem. The WASM build does not support `propStates`; that filter is native-only.
 
 In Node the wasm module initializes itself, so the import is the same as any other module:
 
@@ -50,7 +50,7 @@ let event_json = parseEvent(bytes, 'player_death', ['X', 'Y'], ['total_rounds_pl
 let ticks_json = parseTicks(bytes, ['X', 'Y'])
 ```
 
-Browsers, bundlers, and edge runtimes use the wasm-bindgen `web` build, which needs one async init before the first call. Bundlers that understand `new URL(..., import.meta.url)` (Vite, webpack 5, Rollup) pick up the `.wasm` asset automatically:
+Browsers, bundlers, and edge runtimes use the wasm-bindgen `web` build, which needs one async init before the first call. The default export is the init function only; the API is the named exports. Bundlers that understand `new URL(..., import.meta.url)` (Vite, webpack 5, Rollup) pick up the `.wasm` asset automatically:
 
 ```JavaScript
 import init, { parseEvent, parseTicks } from '@counterstrat/demoparser/wasm'

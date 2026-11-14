@@ -18,6 +18,7 @@ use parser::second_pass::variants::OutputSerdeHelperStruct;
 use parser::second_pass::variants::Variant;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::File;
 use std::hash::RandomState;
 use std::result::Result;
@@ -41,17 +42,21 @@ impl FromNapiValue for JsVariant {
       }
       ValueType::Number => {
         let num: f64 = js_unknown.cast()?;
+        if !num.is_finite() {
+          return Err(Error::new(
+            Status::InvalidArg,
+            "Prop state numbers must be finite".to_owned(),
+          ));
+        }
         if num.fract() == 0.0 {
-          if num >= u8::MIN as f64 && num <= u8::MAX as f64 {
-            Ok(JsVariant(Variant::I32(num as i32)))
-          } else if num >= i32::MIN as f64 && num <= i32::MAX as f64 {
+          if num >= i32::MIN as f64 && num <= i32::MAX as f64 {
             Ok(JsVariant(Variant::I32(num as i32)))
           } else if num >= u32::MIN as f64 && num <= u32::MAX as f64 {
             Ok(JsVariant(Variant::U32(num as u32)))
           } else {
             Err(Error::new(
               Status::InvalidArg,
-              "Unsupported number type".to_owned(),
+              "Integer prop states above u32::MAX must be passed as BigInt".to_owned(),
             ))
           }
         } else {
@@ -486,22 +491,48 @@ pub fn parse_ticks(
     Some(v) => v.iter().map(|x| x.parse::<u64>().unwrap_or(0)).collect(),
     None => vec![],
   };
+  let prop_states = prop_states.unwrap_or_default();
+  let mut seen_prop_states = HashSet::new();
+  for prop in &prop_states {
+    if !seen_prop_states.insert(prop.prop.clone()) {
+      return Err(Error::new(
+        Status::InvalidArg,
+        format!("Duplicate prop state for `{}`", prop.prop),
+      ));
+    }
+  }
   let wanted_prop_states: AHashMap<String, Variant> = prop_states
-    .unwrap_or_default()
     .into_iter()
-    .map(|prop| (prop.prop.clone(), prop.state.0.clone()))
+    .map(|prop| (prop.prop, prop.state.0))
     .collect();
   let wanted_prop_state_names: Vec<String> = wanted_prop_states.keys().cloned().collect();
+  // Node strips the `Weapon.` and `Grenade.` prefixes before the friendly-name
+  // lookup, unlike the Python binding. Python is frozen, so keep this behavior.
   let real_wanted_prop_state_names = match rm_user_friendly_names(&wanted_prop_state_names) {
     Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
   };
+  let mut seen_real_prop_state_names = HashSet::new();
+  for real_name in &real_wanted_prop_state_names {
+    if !seen_real_prop_state_names.insert(real_name.clone()) {
+      return Err(Error::new(
+        Status::InvalidArg,
+        format!("Multiple prop states resolve to the same real name `{}`", real_name),
+      ));
+    }
+  }
   let mut real_wanted_prop_states: AHashMap<String, Variant> = AHashMap::default();
   for (real_name, user_friendly_name) in real_wanted_prop_state_names
     .iter()
     .zip(&wanted_prop_state_names)
   {
-    real_wanted_prop_states.insert(real_name.clone(), wanted_prop_states[user_friendly_name].clone());
+    let Some(state) = wanted_prop_states.get(user_friendly_name) else {
+      return Err(Error::new(
+        Status::InvalidArg,
+        format!("Missing prop state for `{}`", user_friendly_name),
+      ));
+    };
+    real_wanted_prop_states.insert(real_name.clone(), state.clone());
   }
 
   let bytes = resolve_byte_type(path_or_buf)?;
