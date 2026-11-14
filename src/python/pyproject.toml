@@ -12,13 +12,3 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
-
-[dependencies]
-bitreader = "0.3.6"
-protobuf = "3.1.0"
-
-[dependencies.csgoproto]
-path = "./csgoproto"
-
-[profile.dev]
-overflow-checks = false
