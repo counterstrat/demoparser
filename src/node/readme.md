@@ -1,32 +1,30 @@
 # @counterstrat/demoparser
 
-One ESM-only package for Node/Bun (native napi binding) and for browsers, edge
-runtimes, or anywhere Node's native addons do not load (WASM). Node >= 22.
+One ESM-only package (Node >= 22): native napi binding by default, WASM for
+browsers and edge runtimes.
 
-## Install and import
+## Install
 
 ```sh
 npm install @counterstrat/demoparser
 ```
 
-Node and Bun resolve the package root to the native binding:
+Native (Node/Bun):
 
 ```JavaScript
 import { parseEvent, parseTicks } from '@counterstrat/demoparser';
 ```
 
-The `./wasm` subpath takes demo bytes instead of a file path and has no Node
-builtins. Node resolves its `node` condition to the automatically initialized
-wrapper, so the import looks the same:
+WASM (takes demo bytes, no Node builtins):
 
 ```JavaScript
 import { parseEvent, parseTicks } from '@counterstrat/demoparser/wasm';
 ```
 
-Browsers, bundlers, and edge runtimes resolve the `default` condition to the
-wasm-bindgen `web` build. Its default export is the async initializer; the API
-is the named exports. Bundlers that understand `new URL(..., import.meta.url)`
-(Vite, webpack 5, Rollup) pick up the `.wasm` asset automatically:
+`./wasm` resolves by export condition. `node` picks the auto-initialized
+wrapper (`wasm-node.js`); `default` picks the wasm-bindgen `web` build, where
+the default export is the async initializer only and the named exports are the
+API:
 
 ```JavaScript
 import init, { parseEvent, parseTicks } from '@counterstrat/demoparser/wasm';
@@ -34,14 +32,14 @@ import init, { parseEvent, parseTicks } from '@counterstrat/demoparser/wasm';
 await init();
 ```
 
-The WASM build does **not** support `propStates`. That filter is native-only.
+The WASM binding does not expose `propStates` (core supports it; the binding is
+not threaded through).
 
 ## Prop states (native only)
 
-`parseTicks` prop states are plain objects (`{ prop, state }`). `state` accepts
-booleans, strings, finite numbers, and BigInts. Integer values above
-`u32::MAX` (4294967295) must be passed as BigInt; plain numbers there are
-rejected. A tick is kept only when every player matches every wanted state.
+`parseTicks` accepts `{ prop, state }` objects. `state` may be a boolean,
+string, finite number, or BigInt; integers above `u32::MAX` (4294967295) must
+be BigInt. A tick is kept only when every player matches every wanted state.
 
 ## Building from source
 
@@ -54,46 +52,34 @@ cargo install wasm-pack
 cd src/node && npm ci
 ```
 
-Node >= 22 (the `engines` floor), Rust stable, `wasm-pack`, and the
-`wasm32-unknown-unknown` target. `@napi-rs/cli` comes from `npm ci`.
+Node >= 22, Rust stable, `wasm-pack`, and the `wasm32-unknown-unknown` target.
 
 ### Build
 
 ```sh
-npm run build
+npm run build        # native + WASM + both parity guards
+npm run build:wasm   # WASM only
 ```
 
-This builds both the native binding and the WASM output in `wasm/` (via
-`wasm-pack`, `web` target), then runs both export-parity guards
-(`node check-exports.js` and `node check-wasm-exports.js`). To build only the
-WASM output:
+### Test
 
 ```sh
-npm run build:wasm
+npm test              # node --test prop-states suite, then jest
+npm run check:exports # native entry/type/binary parity
+npm run check:wasm    # WASM glue/type/adapter parity
+npm run pack:local    # tarballs into dist/, then smoke-install both
 ```
 
-### Testing
-
-```sh
-npm test                # node --test prop-states suite, then jest
-npm run check:exports   # native entry, types, and local binary parity
-npm run check:wasm      # wasm glue, types, and adapter parity
-```
-
-`npm test` needs a built native binding (`npm run build`). The parity guards
-also run at the end of `npm run build`.
+`npm test` and `pack:local` need a built native binding (`npm run build`).
 
 ## Packaging
 
-`npm pack` and `npm publish` run `prepack`, which rebuilds the native binding
-and the WASM output and runs both guards, so `wasm/` ships inside the root
-tarball.
+`npm pack` and `npm publish` run `prepack` (native + WASM + guards), so `wasm/`
+ships in the root tarball. Platform `.node` binaries do not; `npm publish` runs
+`prepublishOnly` (`create:npm-dirs && napi prepublish`) to publish per-triple
+packages and add their `optionalDependencies`. npm runs `prepublishOnly` before
+`prepack`, so build first (`npm run build` or `napi artifacts`).
 
-The platform `.node` binaries are not part of the root tarball. `npm publish`
-also runs `prepublishOnly` (`npm run create:npm-dirs && napi prepublish`) to
-publish the generated per-triple packages and add them as
-`optionalDependencies`. npm runs `prepublishOnly` before `prepack`, so that
-step expects build artifacts to already exist: run `npm run build` (or
-`napi artifacts` in CI) before `npm publish`. A tarball produced with lifecycle
-scripts disabled has no native binaries or `optionalDependencies`; `wasm/` is
-present only if it was built separately.
+`npm run pack:local` writes the root and matching platform tarballs to
+`src/node/dist/` and prints a ready `npm install <root.tgz> <platform.tgz>`
+line.

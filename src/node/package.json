@@ -71,6 +71,7 @@
     "prepack": "npm run build:wasm && npm run build:native && npm run check:exports && npm run check:wasm",
     "prepublishOnly": "npm run create:npm-dirs && napi prepublish -t npm",
     "test": "npm run test:prop-states && npm run test:jest",
+    "pack:local": "node scripts/pack-local.js",
     "test:jest": "jest",
     "test:prop-states": "node --test tests/prop-states.test.js",
     "universal": "napi universalize",
