@@ -71,6 +71,8 @@ npm run pack:local    # tarballs into dist/, then smoke-install both
 ```
 
 `npm test` and `pack:local` need a built native binding (`npm run build`).
+Jest also needs `tests/data/` (unzip `tests/zipped_testdata.zip`) and
+`../python/tests/test.dem`, a gitignored demo that a fresh clone must provision.
 
 ## Packaging
 

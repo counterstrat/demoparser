@@ -51,6 +51,7 @@
     "timeout": "3m"
   },
   "jest": {
+    "transform": {},
     "testPathIgnorePatterns": [
       "/node_modules/",
       "prop-states\\.test\\.js$"
@@ -72,7 +73,7 @@
     "prepublishOnly": "npm run create:npm-dirs && napi prepublish -t npm",
     "test": "npm run test:prop-states && npm run test:jest",
     "pack:local": "node scripts/pack-local.js",
-    "test:jest": "jest",
+    "test:jest": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:prop-states": "node --test tests/prop-states.test.js",
     "universal": "napi universalize",
     "version": "napi version"

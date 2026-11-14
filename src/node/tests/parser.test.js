@@ -1,6 +1,14 @@
 
-var {parseEvent, parseEvents,parseTicks, parsePlayerInfo, parseGrenades, listGameEvents, parseHeader} = require('../index');
-const fs = require('fs');
+import fs from 'node:fs'
+import {
+  parseEvent,
+  parseEvents,
+  parseTicks,
+  parsePlayerInfo,
+  parseGrenades,
+  listGameEvents,
+  parseHeader,
+} from '../index.js'
 
 
 const filePath = "../python/tests/test.dem"
