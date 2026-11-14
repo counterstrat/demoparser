@@ -1,2 +1,1 @@
-Check out a full deployed (for free with github pages) example here: https://github.com/LaihoE/demoparser-wasm-demo
-
+Browser and edge runtime usage is documented in the [main README](../../README.md#wasm-node-browsers-and-edge-runtimes). Questions or support: [Discord](https://discord.gg/J357yksPnP).
