@@ -159,6 +159,9 @@ jobs:
       - name: Check wasm export parity
         run: npm run check:wasm
 
+      - name: Extract test data
+        run: node scripts/extract-testdata.js
+
       - name: Run JS tests
         run: npm test
 
