@@ -11,7 +11,7 @@ The parser takes a slightly different approach to exposing the information in th
 
 
 ### Install
-Python: ```pip install counterstrat-demoparser``` (python >= 3.8)
+Python: ```pip install counterstrat-demoparser``` (python >= 3.10)
 
 NodeJS: ```npm i @counterstrat/demoparser``` (node >= 22, ESM-only)
 

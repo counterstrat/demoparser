@@ -56,7 +56,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     defaults:
       run:
         working-directory: src/python
@@ -75,7 +75,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: src/python/pyproject.toml
+          cache-dependency-path: src/python/requirements-ci.txt
 
       - name: Install Protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
@@ -86,19 +86,7 @@ jobs:
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install \
-            "maturin==1.16.0" \
-            "patchelf==0.19.3.0" \
-            "mypy==1.14.1; python_version == '3.8'" \
-            "mypy==1.19.1; python_version == '3.9'" \
-            "mypy==2.4.1; python_version >= '3.10'" \
-            "pandas==2.0.3; python_version == '3.8'" \
-            "pandas==2.3.3; python_version >= '3.9' and python_version < '3.11'" \
-            "pandas==3.1.1; python_version >= '3.11'" \
-            "pandas-stubs==2.0.3.230814; python_version == '3.8'" \
-            "pandas-stubs==2.2.2.240807; python_version == '3.9'" \
-            "pandas-stubs==2.3.3.260113; python_version == '3.10'" \
-            "pandas-stubs==3.1.0.261029; python_version >= '3.11'"
+          pip install -r requirements-ci.txt
 
           maturin develop
           python3 tests/signature_tests.py
