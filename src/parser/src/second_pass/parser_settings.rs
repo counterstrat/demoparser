@@ -62,13 +62,22 @@ pub struct RangeRouting {
 pub struct VelocitySample {
     pub prev: Option<[f32; 3]>,
     pub last: Option<[f32; 3]>,
+    pawn_lifetime_start: Option<i32>,
+    last_tick: Option<i32>,
 }
 
 impl VelocitySample {
     #[inline]
-    pub fn push(&mut self, xyz: Option<[f32; 3]>) {
-        self.prev = self.last;
+    pub fn push(&mut self, tick: i32, xyz: Option<[f32; 3]>, pawn_lifetime_start: Option<i32>) {
+        // Only consecutive ticks in the same life give a one-tick velocity.
+        self.prev = if self.last_tick == tick.checked_sub(1) && self.pawn_lifetime_start == pawn_lifetime_start {
+            self.last
+        } else {
+            None
+        };
+        self.last_tick = Some(tick);
         self.last = xyz;
+        self.pawn_lifetime_start = pawn_lifetime_start;
     }
 }
 
@@ -83,6 +92,15 @@ pub struct SecondPassParser<'a> {
     pub net_tick: u32,
     pub parse_inventory: bool,
     pub paths: Vec<FieldPath>,
+    /// Needed-props mode: per class, the last field path any needed prop can live at
+    /// (None inside = class has no needed fields). Outer None = not computed yet.
+    pub class_bounds: Vec<Option<Option<crate::second_pass::entities::PathBound>>>,
+    /// Prop ids that must be decoded for the requested output; see entities::compute_needed.
+    pub needed_ids: crate::second_pass::entities::NeededSet,
+    /// Needed-props mode on (off in debug / list_props mode).
+    pub needed_mode: bool,
+    /// Per class: how collect_projectiles treats it (cached from the class name).
+    pub projectile_class_cache: std::cell::RefCell<Vec<Option<crate::second_pass::collect_data::ProjectileClassKind>>>,
     pub ptr: usize,
     pub parse_all_packets: bool,
     pub ge_list: &'a AHashMap<i32, DescriptorT>,
@@ -102,6 +120,8 @@ pub struct SecondPassParser<'a> {
     pub uniq_prop_names: AHashSet<String>,
     pub baselines: AHashMap<u32, Vec<u8>, RandomState>,
     pub projectiles: BTreeSet<i32>,
+    /// Entity ids of every weapon entity (guns, knives, grenades as items, c4). parse_weapons only.
+    pub weapons: BTreeSet<i32>,
     pub fullpackets_parsed: u32,
     pub wanted_players: AHashSet<u64>,
     pub wanted_ticks: AHashSet<i32>,
@@ -124,6 +144,7 @@ pub struct SecondPassParser<'a> {
     pub parse_entities: bool,
     pub parse_projectiles: bool,
     pub parse_grenades: bool,
+    pub parse_weapons: bool,
     pub grenade_classes: Option<Vec<String>>,
     pub is_debug_mode: bool,
     pub df_per_player: AHashMap<u64, AHashMap<u32, PropColumn>>,
@@ -206,7 +227,7 @@ impl<'a> SecondPassParser<'a> {
                 .collect(),
             game_events_counter: self.game_events_counter,
             uniq_prop_names: self.uniq_prop_names,
-            prop_info: PropController::new(vec![], vec![], AHashMap::default(), AHashMap::default(), false, &["none".to_string()], false),
+            prop_info: PropController::new(vec![], vec![], AHashMap::default(), AHashMap::default(), false, &["none".to_string()], false, false, false),
             projectiles: self.projectile_records,
             ptr: self.ptr,
             df_per_player: self.df_per_player,
@@ -234,6 +255,10 @@ impl<'a> SecondPassParser<'a> {
             order_by_steamid: shared.order_by_steamid,
             df_per_player: AHashMap::default(),
             voice_data: vec![],
+            class_bounds: vec![],
+            needed_ids: crate::second_pass::entities::compute_needed(&shared.prop_controller, settings),
+            needed_mode: !debug && !shared.list_props,
+            projectile_class_cache: std::cell::RefCell::new(vec![]),
             paths: vec![
                 FieldPath {
                     last: 0,
@@ -270,12 +295,14 @@ impl<'a> SecondPassParser<'a> {
             range_routing: None,
             parse_entities: settings.parse_ents,
             projectiles: BTreeSet::default(),
+            weapons: BTreeSet::default(),
             baselines: shared.baselines.clone(),
             string_tables: shared.string_tables.clone(),
             teams: Teams::new(),
             game_events_counter: AHashSet::default(),
             parse_projectiles: settings.parse_projectiles,
             parse_grenades: settings.parse_grenades,
+            parse_weapons: settings.parse_weapons,
             grenade_classes: settings.grenade_classes.clone(),
             rules_entity_id: None,
             convars: AHashMap::default(),
@@ -346,8 +373,10 @@ pub struct SpecialIDs {
     pub orig_own_low: Option<u32>,
     pub orig_own_high: Option<u32>,
     pub life_state: Option<u32>,
+    pub pawn_lifetime_start: Option<u32>,
 
     pub h_owner_entity: Option<u32>,
+    pub weapon_prev_owner: Option<u32>,
     pub agent_skin_idx: Option<u32>,
     pub total_rounds_played: Option<u32>,
 
@@ -368,7 +397,67 @@ pub struct SpecialIDs {
     pub custom_name: Option<u32>,
 
     pub is_airborn: Option<u32>,
+    pub stamina: Option<u32>,
     pub initial_velocity: Option<u32>,
+}
+
+impl SpecialIDs {
+    /// Every prop id the parser reads internally (bookkeeping, custom props, events).
+    pub fn all(&self) -> Vec<u32> {
+        [
+            self.teamnum,
+            self.player_name,
+            self.steamid,
+            self.player_pawn,
+            self.player_team_pointer,
+            self.weapon_owner_pointer,
+            self.team_team_num,
+            self.cell_x_player,
+            self.cell_y_player,
+            self.cell_z_player,
+            self.cell_x_offset_player,
+            self.cell_y_offset_player,
+            self.cell_z_offset_player,
+            self.active_weapon,
+            self.item_def,
+            self.m_vec_x_grenade,
+            self.m_vec_y_grenade,
+            self.m_vec_z_grenade,
+            self.m_cell_x_grenade,
+            self.m_cell_y_grenade,
+            self.m_cell_z_grenade,
+            self.grenade_owner_id,
+            self.buttons,
+            self.eye_angles,
+            self.orig_own_low,
+            self.orig_own_high,
+            self.life_state,
+            self.pawn_lifetime_start,
+            self.h_owner_entity,
+            self.weapon_prev_owner,
+            self.agent_skin_idx,
+            self.total_rounds_played,
+            self.round_win_reason,
+            self.round_start_count,
+            self.round_end_count,
+            self.match_end_count,
+            self.is_incendiary_grenade,
+            self.sellback_entry_def_idx,
+            self.sellback_entry_n_cost,
+            self.sellback_entry_prev_armor,
+            self.sellback_entry_prev_helmet,
+            self.sellback_entry_h_item,
+            self.weapon_purchase_count,
+            self.in_buy_zone,
+            self.custom_name,
+            self.is_airborn,
+            self.stamina,
+            self.initial_velocity,
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
 }
 impl SpecialIDs {
     pub fn new() -> Self {
@@ -379,6 +468,7 @@ impl SpecialIDs {
             round_win_reason: None,
             total_rounds_played: None,
             h_owner_entity: None,
+            weapon_prev_owner: None,
             teamnum: None,
             player_name: None,
             steamid: None,
@@ -406,6 +496,7 @@ impl SpecialIDs {
             orig_own_high: None,
             orig_own_low: None,
             life_state: None,
+            pawn_lifetime_start: None,
             agent_skin_idx: None,
             is_incendiary_grenade: None,
             sellback_entry_def_idx: None,
@@ -417,6 +508,7 @@ impl SpecialIDs {
             in_buy_zone: None,
             custom_name: None,
             is_airborn: None,
+            stamina: None,
             initial_velocity: None,
         }
     }

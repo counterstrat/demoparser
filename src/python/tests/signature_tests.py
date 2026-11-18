@@ -35,12 +35,25 @@ class SignatureTest(TestCase):
         for event in game_events:
             self.assertIsInstance(event, str)
 
+    def test_parse_weapons_signature(self):
+        parser = DemoParser(demo_path)
+        weapons = parser.parse_weapons()
+        self.assertIsInstance(weapons, pd.DataFrame)
+        for col in ["tick", "entity_id", "weapon", "x", "y", "z", "steamid", "name"]:
+            self.assertIn(col, weapons.columns)
+        parser.parse_weapons(extra=["m_nDropTick"], ticks=[100, 200])
+        with self.assertRaises(TypeError):
+            parser.parse_weapons(extra=[5])
+        with self.assertRaises(TypeError):
+            parser.parse_weapons(ticks="wrong")
+
     def test_parse_grenades_signature(self):
         parser = DemoParser(demo_path)
         grenades = parser.parse_grenades()
         self.assertIsInstance(grenades, pd.DataFrame)
         parser.parse_grenades(extra=["game_time"], grenades=True)
         parser.parse_grenades(extra=["game_time"], grenades=False)
+        parser.parse_grenades(extra=["game_time"], grenades=False, ticks=[100, 200])
         with self.assertRaises(TypeError):
             parser.parse_grenades(extra=[5])
         with self.assertRaises(TypeError):
@@ -137,7 +150,7 @@ class SignatureTest(TestCase):
         voice = parser.parse_voice()
         self.assertIsInstance(voice, list)
         for entry in voice:
-            self.assertEqual(set(entry.keys()), {"ticks", "steamid", "bytes"})
+            self.assertEqual(set(entry.keys()), {"tick", "steamid", "bytes"})
             self.assertIsInstance(entry["tick"], int)
             self.assertIsInstance(entry["steamid"], int)
             self.assertIsInstance(entry["bytes"], bytes)

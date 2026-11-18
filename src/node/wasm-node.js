@@ -24,5 +24,6 @@ export const {
   parseGrenades,
   parseHeader,
   parseTickRange,
-  parseTicks
+  parseTicks,
+  parseWeapons
 } = wasm

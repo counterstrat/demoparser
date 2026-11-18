@@ -2,14 +2,15 @@ use super::entities::PlayerMetaData;
 use super::variants::Sticker;
 use super::variants::Variant;
 use crate::entity_handle::entity_handle_index;
+use crate::entity_handle::INVALID_ENTITY_ID;
 use crate::first_pass::prop_controller::*;
 use crate::first_pass::read_bits::DemoParserError;
 use crate::maps::BUTTONMAP;
 use crate::maps::PLAYER_COLOR;
+use crate::second_pass::entities::Entity;
 use crate::second_pass::entities::EntityType;
 use crate::second_pass::parser_settings::SecondPassParser;
 use crate::second_pass::variants::PropColumn;
-use crate::second_pass::variants::VarVec;
 use csgoproto::maps::AGENTSMAP;
 use csgoproto::maps::PAINTKITS;
 use csgoproto::maps::STICKER_ID_TO_NAME;
@@ -49,6 +50,13 @@ pub struct ProjectileRecord {
     pub grenade_type: Option<String>,
     pub entity_id: Option<i32>,
 }
+/// Per class, for collect_projectiles: thrown projectiles and the fire (CInferno) are collected
+/// even when only projectiles are requested, and are the only ones with coordinates.
+#[derive(Debug, Clone, Copy)]
+pub struct ProjectileClassKind {
+    pub always_collected: bool,
+    pub has_coordinates: bool,
+}
 pub enum CoordinateAxis {
     X,
     Y,
@@ -70,13 +78,22 @@ impl<'a> SecondPassParser<'a> {
         // Event-only queries skip collection to avoid materialising `df`.
         let tick_wanted = self.wanted_ticks.is_empty() || self.wanted_ticks.contains(&self.tick);
         if !self.collect_ticks || !tick_wanted {
-            if self.prop_controller.event_with_velocity && !self.parse_projectiles {
+            // Mirror `collect_entities_ranged`: velocity history must advance on every decoded
+            // tick, including event-only scans, so event velocity stays a one-tick delta.
+            if (self.prop_controller.needs_velocity || self.prop_controller.event_with_velocity)
+                && !self.parse_projectiles
+                && !self.parse_weapons
+            {
                 self.update_velocity_history();
             }
             return;
         }
         if self.parse_projectiles {
             self.collect_projectiles();
+            return;
+        }
+        if self.parse_weapons {
+            self.collect_weapons();
             return;
         }
         // GATED ROUTING (multi-range only): when bounds are set, this tick's
@@ -118,11 +135,18 @@ impl<'a> SecondPassParser<'a> {
                 }
             } else {
                 for prop_info in &self.prop_controller.prop_infos {
+                    // Strings (names, places, weapon names, ...) repeat over many rows: they go into
+                    // dictionary columns, borrowed where possible so no String is allocated per row.
+                    if let Some(s) = Self::find_prop_str(&self.entities, prop_info, entity_id, player) {
+                        self.output.entry(prop_info.id).or_insert_with(PropColumn::new).push_str(s);
+                        continue;
+                    }
                     let val = self.find_prop_with_collect_cache(prop_info, entity_id, player, &mut velocity_indicies, &mut button_mask);
-                    self.output
-                        .entry(prop_info.id)
-                        .or_insert_with(PropColumn::new)
-                        .push(val);
+                    let col = self.output.entry(prop_info.id).or_insert_with(PropColumn::new);
+                    match val {
+                        Some(Variant::String(s)) => col.push_str(Some(&s)),
+                        val => col.push(val),
+                    }
                 }
             }
         }
@@ -211,6 +235,28 @@ impl<'a> SecondPassParser<'a> {
                 Ok(prop) => prop.state_matches(&info.wanted_prop_state),
                 Err(_) => false,
             })
+    }
+
+    /// Borrowed string value of a prop, for props that are plain strings read straight from the
+    /// player metadata or an entity: Some(value) if it is such a prop holding a string (or missing),
+    /// None to go through find_prop.
+    #[inline(always)]
+    fn find_prop_str<'s>(entities: &'s [Option<Entity>], prop_info: &PropInfo, entity_id: &i32, player: &'s PlayerMetaData) -> Option<Option<&'s str>> {
+        let ent_id = match prop_info.prop_type {
+            PropType::Name => return Some(player.name.as_deref()),
+            PropType::Player => *entity_id,
+            PropType::Controller => player.controller_entid?,
+            _ => return None,
+        };
+        match entities.get(ent_id as usize) {
+            Some(Some(e)) => match e.props.get(&prop_info.id) {
+                Some(Variant::String(s)) => Some(Some(s.as_str())),
+                // Not a string: the normal path.
+                Some(_) => None,
+                None => Some(None),
+            },
+            _ => Some(None),
+        }
     }
 
     #[inline(always)]
@@ -370,43 +416,39 @@ impl<'a> SecondPassParser<'a> {
         }
     }
 
-    fn find_grenade_type(&self, entity_id: &i32) -> Option<String> {
-        if let Some(Some(ent)) = self.entities.get(*entity_id as usize) {
-            if let Some(cls) = self.cls_by_id.get(ent.cls_id as usize) {
-                return Some(cls.name.to_string());
-            }
-        }
-        None
-    }
-
     pub fn collect_projectiles(&mut self) {
+        if self.projectiles.is_empty() {
+            return;
+        }
+        // Taken out so the lookups below can borrow names from self while pushing.
+        let mut output = std::mem::take(&mut self.output);
+        const FIXED: [u32; 8] = [STEAMID_ID, NAME_ID, TICK_ID, GRENADE_TYPE_ID, ENTITY_ID_ID, GRENADE_X, GRENADE_Y, GRENADE_Z];
+        let extra: Vec<u32> = self.prop_controller.prop_infos.iter().map(|p| p.id).filter(|id| !FIXED.contains(id)).collect();
         for projectile_entid in &self.projectiles {
-            let grenade_type = match self.find_grenade_type(projectile_entid) {
-                Some(t) => {
-                    if !t.contains("Projectile") {
-                        if !self.parse_grenades {
-                            continue;
-                        }
-                        if let Some(allowed) = &self.grenade_classes {
-                            if !allowed.contains(&t) {
-                                continue;
-                            }
-                        }
-                    }
-                    t
+            let (grenade_type, kind) = match self.entities.get(*projectile_entid as usize) {
+                Some(Some(ent)) => match self.cls_by_id.get(ent.cls_id as usize) {
+                    Some(cls) => (cls.name.as_str(), self.projectile_class_kind(ent.cls_id as usize, &cls.name)),
+                    None => continue,
+                },
+                _ => continue,
+            };
+            if !kind.always_collected {
+                if !self.parse_grenades {
+                    continue;
                 }
-                None => continue,
-            };
-            let steamid = match self.find_thrower_steamid(projectile_entid) {
-                Ok(u) => u,
-                _ => continue,
-            };
-            let name = match self.find_thrower_name(projectile_entid) {
-                Ok(x) => x,
-                _ => continue,
-            };
-            // Projectiles are the only ones with coordinates others map to 0.0, map them to None as it is clearer.
-            let (x, y, z) = if grenade_type.contains("Project") {
+                if let Some(allowed) = &self.grenade_classes {
+                    if !allowed.iter().any(|c| c == grenade_type) {
+                        continue;
+                    }
+                }
+            }
+            let Ok(owner_entid) = self.find_owner_entid(projectile_entid) else { continue };
+            let Ok(metadata) = self.find_player_metadata(owner_entid as i32) else { continue };
+            let Some(name) = metadata.name.as_deref() else { continue };
+            // Watch out
+            let steamid = metadata.steamid.unwrap_or(0);
+            // Projectiles (and the fire) are the only ones with coordinates, others map to 0.0, map them to None as it is clearer.
+            let (x, y, z) = if kind.has_coordinates {
                 let x = self.collect_cell_coordinate_grenade(CoordinateAxis::X, projectile_entid).ok();
                 let y = self.collect_cell_coordinate_grenade(CoordinateAxis::Y, projectile_entid).ok();
                 let z = self.collect_cell_coordinate_grenade(CoordinateAxis::Z, projectile_entid).ok();
@@ -414,14 +456,71 @@ impl<'a> SecondPassParser<'a> {
             } else {
                 (None, None, None)
             };
+            // Names and types repeat over many rows: dictionary columns, no allocation per row.
+            output.entry(GRENADE_TYPE_ID).or_insert_with(PropColumn::new_str_dict).push_str(Some(grenade_type));
+            output.entry(NAME_ID).or_insert_with(PropColumn::new_str_dict).push_str(Some(name));
+            output.entry(STEAMID_ID).or_insert_with(PropColumn::new).push(Some(Variant::U64(steamid)));
+            output.entry(TICK_ID).or_insert_with(PropColumn::new).push(Some(Variant::I32(self.tick)));
+            output.entry(ENTITY_ID_ID).or_insert_with(PropColumn::new).push(Some(Variant::I32(*projectile_entid)));
+            output.entry(GRENADE_X).or_insert_with(PropColumn::new).push(x);
+            output.entry(GRENADE_Y).or_insert_with(PropColumn::new).push(y);
+            output.entry(GRENADE_Z).or_insert_with(PropColumn::new).push(z);
+            // Extra requested props, from the grenade entity.
+            for id in &extra {
+                let prop = self.get_prop_from_ent(id, projectile_entid).ok();
+                output.entry(*id).or_insert_with(PropColumn::new).push(prop);
+            }
+        }
+        self.output = output;
+    }
+
+    /// What collect_projectiles does with a class, from its name; cached per class.
+    /// The cache is indexed by class id (`cls_id`) and lives on the second-pass parser, so ids
+    /// and names always come from this demo's class list; it is discarded with the parser.
+    fn projectile_class_kind(&self, cls_id: usize, name: &str) -> ProjectileClassKind {
+        let mut cache = self.projectile_class_cache.borrow_mut();
+        if cache.len() <= cls_id {
+            cache.resize(cls_id + 1, None);
+        }
+        *cache[cls_id].get_or_insert_with(|| ProjectileClassKind {
+            always_collected: name.contains("Projectile"),
+            has_coordinates: name.contains("Project"),
+        })
+    }
+
+    /// Weapons lying on the ground this tick: dropped on death, thrown with the drop key
+    /// or never picked up. A weapon with an owner is held (parented to the player, its
+    /// coordinates are relative) and is skipped. steamid/name refer to the previous owner
+    /// (m_hPrevOwner): the player who dropped it, None if it never had one.
+    pub fn collect_weapons(&mut self) {
+        let owner_id = match self.prop_controller.special_ids.h_owner_entity {
+            Some(id) => id,
+            None => return,
+        };
+        for weapon_entid in &self.weapons {
+            match self.get_prop_from_ent(&owner_id, weapon_entid) {
+                Ok(Variant::U32(handle)) => {
+                    if entity_handle_index(handle) != INVALID_ENTITY_ID {
+                        continue;
+                    }
+                }
+                Ok(_) => continue,
+                // Owner never sent: the entity has been ownerless since it was created
+                Err(_) => {}
+            }
+            let (steamid, name) = self.find_weapon_prev_owner(weapon_entid);
+            let weapon_name = self.find_weapon_name_from_weapon_entity(weapon_entid).ok();
+            let x = self.collect_cell_coordinate_grenade(CoordinateAxis::X, weapon_entid).ok();
+            let y = self.collect_cell_coordinate_grenade(CoordinateAxis::Y, weapon_entid).ok();
+            let z = self.collect_cell_coordinate_grenade(CoordinateAxis::Z, weapon_entid).ok();
 
             // Insert these always
             let pairs = vec![
-                (GRENADE_TYPE_ID, Some(Variant::String(grenade_type))),
-                (STEAMID_ID, Some(Variant::U64(steamid))),
-                (NAME_ID, Some(Variant::String(name))),
+                (WEAPON_ENTITY_NAME_ID, weapon_name),
+                (STEAMID_ID, steamid.map(Variant::U64)),
+                (NAME_ID, name.map(Variant::String)),
                 (TICK_ID, Some(Variant::I32(self.tick))),
-                (ENTITY_ID_ID, Some(Variant::I32(*projectile_entid))),
+                (ENTITY_ID_ID, Some(Variant::I32(*weapon_entid))),
                 (GRENADE_X, x),
                 (GRENADE_Y, y),
                 (GRENADE_Z, z),
@@ -429,13 +528,12 @@ impl<'a> SecondPassParser<'a> {
             for pair in pairs {
                 self.output.entry(pair.0).or_insert_with(|| PropColumn::new()).push(pair.1);
             }
-
+            // Extra props are read from the weapon entity itself
             for prop_info in &self.prop_controller.prop_infos {
-                // Do these above, props in this loop are from the weapon entity.
                 if prop_info.id == STEAMID_ID
                     || prop_info.id == NAME_ID
                     || prop_info.id == TICK_ID
-                    || prop_info.id == GRENADE_TYPE_ID
+                    || prop_info.id == WEAPON_ENTITY_NAME_ID
                     || prop_info.id == ENTITY_ID_ID
                     || prop_info.id == GRENADE_X
                     || prop_info.id == GRENADE_Y
@@ -443,19 +541,39 @@ impl<'a> SecondPassParser<'a> {
                 {
                     continue;
                 }
-                let prop = match self.get_prop_from_ent(&prop_info.id, &projectile_entid) {
-                    Ok(p) => Some(p),
-                    _ => None,
-                };
-                match prop {
-                    Some(prop) => {
-                        self.output.entry(prop_info.id).or_insert_with(|| PropColumn::new()).push(Some(prop));
-                    }
-                    None => {
-                        self.output.entry(prop_info.id).or_insert_with(|| PropColumn::new()).push(None);
-                    }
-                }
+                let prop = self.get_prop_from_ent(&prop_info.id, weapon_entid).ok();
+                self.output.entry(prop_info.id).or_insert_with(|| PropColumn::new()).push(prop);
             }
+        }
+    }
+    /// Player who held the weapon last (m_hPrevOwner), if it maps to a known player
+    fn find_weapon_prev_owner(&self, entity_id: &i32) -> (Option<u64>, Option<String>) {
+        let prev_owner_id = match self.prop_controller.special_ids.weapon_prev_owner {
+            Some(id) => id,
+            None => return (None, None),
+        };
+        let pawn_entid = match self.get_prop_from_ent(&prev_owner_id, entity_id) {
+            Ok(Variant::U32(handle)) => entity_handle_index(handle),
+            _ => return (None, None),
+        };
+        match self.find_player_metadata(pawn_entid) {
+            Ok(metadata) => (metadata.steamid, metadata.name.clone()),
+            Err(_) => (None, None),
+        }
+    }
+    /// Weapon name read directly from a weapon entity (find_weapon_name goes through a player)
+    fn find_weapon_name_from_weapon_entity(&self, entity_id: &i32) -> Result<Variant, PropCollectionError> {
+        let item_def_id = match self.prop_controller.special_ids.item_def {
+            Some(x) => x,
+            None => return Err(PropCollectionError::SpecialidsItemDefNotSet),
+        };
+        match self.get_prop_from_ent(&item_def_id, entity_id) {
+            Ok(Variant::U32(def_idx)) => match WEAPINDICIES.get(&def_idx) {
+                Some(v) => Ok(Variant::String(v.to_string())),
+                None => Err(PropCollectionError::WeaponIdxMappingNotFound),
+            },
+            Ok(_) => Err(PropCollectionError::WeaponDefVariantWrongType),
+            Err(e) => Err(e),
         }
     }
 
@@ -600,6 +718,10 @@ impl<'a> SecondPassParser<'a> {
             IS_ALIVE_ID => self.find_is_alive(entity_id),
             USERID_ID => self.get_userid(player),
             IS_AIRBORNE_ID => self.find_is_airborne(player),
+            STAMINA_ID => {
+                let id = self.prop_controller.special_ids.stamina.ok_or(PropCollectionError::GetPropFromEntPropNotFound)?;
+                self.get_prop_from_ent(&id, entity_id)
+            }
             AGENT_SKIN_ID => self.find_agent_skin(player),
             USERCMD_INPUT_HISTORY_BASEID => self.get_prop_from_ent(&USERCMD_INPUT_HISTORY_BASEID, entity_id),
             USERCMD_SUBTICK_MOVES_BASEID => self.get_prop_from_ent(&USERCMD_SUBTICK_MOVES_BASEID, entity_id),
@@ -765,7 +887,7 @@ impl<'a> SecondPassParser<'a> {
                 return;
             }
         }
-        let mut updates: Vec<(u64, Option<[f32; 3]>)> = Vec::with_capacity(self.players.len());
+        let mut updates = Vec::with_capacity(self.players.len());
         for (entity_id, player) in &self.players {
             let steamid = player.steamid.unwrap_or(0);
             if !self.wanted_players.is_empty() && !self.wanted_players.contains(&steamid) {
@@ -778,10 +900,14 @@ impl<'a> SecondPassParser<'a> {
                 (Ok(Variant::F32(x)), Ok(Variant::F32(y)), Ok(Variant::F32(z))) => Some([x, y, z]),
                 _ => None,
             };
-            updates.push((steamid, xyz));
+            let pawn_lifetime_start = self.prop_controller.special_ids.pawn_lifetime_start.and_then(|id| match self.get_controller_prop(&id, player) {
+                Ok(Variant::I32(start)) => Some(start),
+                _ => None,
+            });
+            updates.push((steamid, xyz, pawn_lifetime_start));
         }
-        for (steamid, xyz) in updates {
-            self.velocity_history.entry(steamid).or_default().push(xyz);
+        for (steamid, xyz, pawn_lifetime_start) in updates {
+            self.velocity_history.entry(steamid).or_default().push(self.tick, xyz, pawn_lifetime_start);
         }
     }
     fn collect_velocity_cached(&self, player: &PlayerMetaData, _indicies_cache: &mut Option<Vec<usize>>) -> Result<Variant, PropCollectionError> {
@@ -802,76 +928,6 @@ impl<'a> SecondPassParser<'a> {
     ) -> Result<Variant, PropCollectionError> {
         self.collect_velocity_axis(player, axis)
     }
-    fn cached_velocity_indicies<'b>(
-        &self,
-        player: &PlayerMetaData,
-        indicies_cache: &'b mut Option<Vec<usize>>,
-    ) -> Result<&'b [usize], PropCollectionError> {
-        if indicies_cache.is_none() {
-            let steamid = player.steamid.ok_or(PropCollectionError::PlayerNotFound)?;
-            *indicies_cache = Some(self.find_wanted_indicies(self.output.get(&STEAMID_ID), steamid));
-        }
-        Ok(indicies_cache.as_deref().unwrap_or(&[]))
-    }
-    fn find_most_recent_coordinate_idx(&self, optv: Option<&PropColumn>, wanted_steamid: u64) -> Option<usize> {
-        if let Some(v) = optv {
-            if let Some(VarVec::U64(steamid_vec)) = &v.data {
-                for idx in (0..steamid_vec.len()).rev() {
-                    if steamid_vec[idx] == Some(wanted_steamid) {
-                        return Some(idx);
-                    }
-                }
-            }
-        }
-        None
-    }
-    fn find_last_coordinate_idx(&self, optv: Option<&PropColumn>, wanted_steamid: u64, cur_idx: Option<usize>) -> Option<usize> {
-        let cur_idx = cur_idx?;
-        if let VarVec::U64(steamid_vec) = optv?.data.as_ref()? {
-            // iterate backwards until steamid is our wanted player and > 1sec ago
-            for idx in (0..steamid_vec.len()).rev() {
-                let sid = steamid_vec[idx];
-                if sid == Some(wanted_steamid) && idx != cur_idx {
-                    return Some(idx);
-                }
-            }
-        }
-        None
-    }
-    fn find_wanted_indicies(&self, optv: Option<&PropColumn>, wanted_steamid: u64) -> Vec<usize> {
-        let idx1 = self.find_most_recent_coordinate_idx(optv, wanted_steamid);
-        let idx2 = self.find_last_coordinate_idx(optv, wanted_steamid, idx1);
-        if let (Some(idx1), Some(idx2)) = (idx1, idx2) {
-            return vec![idx1, idx2];
-        }
-        vec![]
-    }
-
-    fn velocity_from_indicies(&self, indicies: &[usize], axis: CoordinateAxis) -> Result<Variant, PropCollectionError> {
-        let col = match axis {
-            CoordinateAxis::X => self.output.get(&PLAYER_X_ID),
-            CoordinateAxis::Y => self.output.get(&PLAYER_Y_ID),
-            CoordinateAxis::Z => self.output.get(&PLAYER_Z_ID),
-        };
-        if let Some(c) = col {
-            if let Some((Some(v1), Some(v2))) = self.index_coordinates_from_propcol(c, indicies) {
-                return Ok(Variant::F32((v1 * 64.0) - (v2 * 64.0)));
-            }
-        }
-        return Err(PropCollectionError::VelocityNotFound);
-    }
-    fn index_coordinates_from_propcol(&self, propcol: &PropColumn, indicies: &[usize]) -> Option<(Option<f32>, Option<f32>)> {
-        if indicies.len() != 2 {
-            return None;
-        }
-        if let Some(VarVec::F32(steamid_vec)) = &propcol.data {
-            let first = steamid_vec[indicies[0]];
-            let second = steamid_vec[indicies[1]];
-            return Some((first, second));
-        }
-        None
-    }
-
     pub fn find_is_alive(&self, entity_id: &i32) -> Result<Variant, PropCollectionError> {
         match self.prop_controller.special_ids.life_state {
             Some(id) => match self.get_prop_from_ent(&id, entity_id) {

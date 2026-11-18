@@ -21,6 +21,9 @@ pub enum Decoder {
     FloatCoordDecoder,
     FloatSimulationTimeDecoder,
     Fixed64Decoder,
+    Fixed8Decoder,
+    Fixed8SignedDecoder,
+    Fixed8Unsigned64Decoder,
     QanglePitchYawDecoder,
     Qangle3Decoder(u8),
     QangleVarDecoder,
@@ -57,12 +60,70 @@ impl<'a> Bitreader<'a> {
             VectorNormalDecoder => Ok(Variant::VecXYZ(self.decode_normal_vec()?)),
             Unsigned64Decoder => Ok(Variant::U64(self.read_varint_u_64()?)),
             Fixed64Decoder => Ok(Variant::U64(self.decode_uint64()?)),
+            // "fixed8" encoder: one raw byte instead of a varint. Each variant keeps the
+            // Variant type the field had before it got the encoder.
+            Fixed8Decoder => Ok(Variant::U32(self.read_nbits(8)?)),
+            Fixed8SignedDecoder => Ok(Variant::I32(self.read_nbits(8)? as u8 as i8 as i32)),
+            Fixed8Unsigned64Decoder => Ok(Variant::U64(self.read_nbits(8)? as u64)),
             VectorFloatCoordDecoder => Ok(Variant::VecXYZ(self.decode_vector_float_coord()?)),
             AmmoDecoder => Ok(Variant::U32(self.decode_ammo()?)),
             QanglePresDecoder => Ok(Variant::VecXYZ(self.decode_qangle_variant_pres()?)),
             GameModeRulesDecoder => Ok(Variant::Bool(self.decode_poly()?)),
             BinaryBlockDecoder => Ok(Variant::String(self.decode_binary_block()?)),
         }
+    }
+
+    /// Bit width of a value with this decoder, if it is the same for every value.
+    #[inline(always)]
+    pub fn fixed_bits(decoder: &Decoder, qf_map: &QfMapper) -> Option<u32> {
+        match decoder {
+            NoscaleDecoder => Some(32),
+            VectorNoscaleDecoder => Some(96),
+            BooleanDecoder | ComponentDecoder => Some(1),
+            Fixed8Decoder | Fixed8SignedDecoder | Fixed8Unsigned64Decoder => Some(8),
+            Fixed64Decoder => Some(64),
+            Qangle3Decoder(bits) => Some(3 * *bits as u32),
+            QuantalizedFloatDecoder(idx) => qf_map.map.get(&(*idx as u32)).and_then(|qf| qf.fixed_bits()),
+            _ => None,
+        }
+    }
+    /// Advance past one value without building a `Variant` (no allocation for strings/blobs).
+    #[inline(always)]
+    pub fn skip_value(&mut self, decoder: &Decoder, qf_map: &QfMapper) -> Result<(), DemoParserError> {
+        match decoder {
+            NoscaleDecoder => self.skip(32),
+            VectorNoscaleDecoder => self.skip(96),
+            BooleanDecoder | ComponentDecoder => self.skip(1),
+            Fixed8Decoder | Fixed8SignedDecoder | Fixed8Unsigned64Decoder => self.skip(8),
+            Fixed64Decoder => self.skip(64),
+            Qangle3Decoder(bits) => self.skip(3 * *bits as u32),
+            UnsignedDecoder | BaseDecoder | CentityHandleDecoder | FloatSimulationTimeDecoder | SignedDecoder => {
+                self.skip_varint();
+            }
+            QanglePresDecoder => {
+                // 3 presence bits, then 20 bits per present component.
+                let present = self.read_nbits(3)?;
+                self.skip(present.count_ones() * 20);
+            }
+            Unsigned64Decoder => {
+                self.read_varint_u_64()?;
+            }
+            QuantalizedFloatDecoder(idx) => match qf_map.map.get(&(*idx as u32)) {
+                Some(qf) => qf.skip(self)?,
+                None => return Err(DemoParserError::MalformedMessage),
+            },
+            StringDecoder => {
+                while self.read_nbits(8)? != 0 {}
+            }
+            BinaryBlockDecoder => {
+                let n = self.read_varint()?;
+                self.skip(n.saturating_mul(8));
+            }
+            _ => {
+                self.decode(decoder, qf_map)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn decode_binary_block(&mut self) -> Result<String, DemoParserError> {
@@ -300,6 +361,30 @@ impl QuantalizedFloat {
         let i = ((val - self.low) * self.high_low_mul) as u32;
         self.low + (self.high - self.low) * ((i as f32) * self.dec_mul)
     }
+    /// Width in bits when no flag bits precede the value.
+    #[inline(always)]
+    pub fn fixed_bits(&self) -> Option<u32> {
+        if self.flags & (QFF_ROUNDDOWN | QFF_ROUNDUP | QFF_ENCODE_ZERO) == 0 {
+            Some(self.bit_count)
+        } else {
+            None
+        }
+    }
+    /// Same bit consumption as `decode`, without computing the float.
+    #[inline(always)]
+    pub fn skip(&self, bitreader: &mut Bitreader) -> Result<(), DemoParserError> {
+        if self.flags & QFF_ROUNDDOWN != 0 && bitreader.read_boolean()? {
+            return Ok(());
+        }
+        if self.flags & QFF_ROUNDUP != 0 && bitreader.read_boolean()? {
+            return Ok(());
+        }
+        if self.flags & QFF_ENCODE_ZERO != 0 && bitreader.read_boolean()? {
+            return Ok(());
+        }
+        bitreader.skip(self.bit_count);
+        Ok(())
+    }
     pub fn decode(&self, bitreader: &mut Bitreader) -> Result<f32, DemoParserError> {
         if self.flags & QFF_ROUNDDOWN != 0 && bitreader.read_boolean()? {
             return Ok(self.low);
@@ -432,6 +517,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn fixed8_reads_one_raw_byte() {
+        let qf_map = QfMapper {
+            idx: 0,
+            map: AHashMap::default(),
+        };
+        // 0x85 as a varint would also consume the next byte. fixed8 must not.
+        let bytes = [0x85, 0x01, 0xff, 0x7f];
+        let mut bitreader = Bitreader::new(&bytes);
+        assert_eq!(bitreader.decode(&Fixed8Decoder, &qf_map), Ok(Variant::U32(0x85)));
+        assert_eq!(bitreader.decode(&Fixed8Unsigned64Decoder, &qf_map), Ok(Variant::U64(1)));
+        assert_eq!(bitreader.decode(&Fixed8SignedDecoder, &qf_map), Ok(Variant::I32(-1)));
+        assert_eq!(bitreader.decode(&Fixed8SignedDecoder, &qf_map), Ok(Variant::I32(127)));
     }
 
     #[test]

@@ -16,6 +16,14 @@ def parse_grenades(
    self,
    extra: Optional[Sequence[str]] = None, 
    grenades: bool = True,
+   grenade_classes: Optional[Sequence[str]] = None,
+   skip_nones: bool = False,
+   ticks: Optional[Sequence[int]] = None,
+) -> pd.DataFrame: ...
+def parse_weapons(
+   self,
+   extra: Optional[Sequence[str]] = None,
+   ticks: Optional[Sequence[int]] = None,
 ) -> pd.DataFrame: ...
 def parse_event(
    self,
@@ -140,3 +148,14 @@ Returns all coordinates of all grenades along with info about thrower. entity_id
     0 -388.875  1295.46875 -5120.0   982     76561111111111111    HeGrenade        522
     1 -388.875  1295.46875 -5120.0   983     76561111111111111    HeGrenade        522
     2 -388.875  1295.46875 -5120.0   983     76561111111111111    HeGrenade        522
+
+The fire of a molotov/incendiary is its own entity (CInferno) that lives on after the projectile; with grenades enabled it is included with grenade_type "CInferno". Array and vector fields requested with "extra" come back whole, as lists (one list per row), for example "m_firePositions"/"m_bFireIsBurning"/"m_fireCount" of the fire (one slot per possible flame, 64, in world coordinates; only the first m_fireCount entries with m_bFireIsBurning are alight; the fire entity has no position of its own, x/y/z are NaN) or "m_VoxelFrameData" of a smoke (the raw bytes of the smoke volume). Big fields like that are repeated on every tick the entity exists, so pass "ticks" to sample them: parser.parse_grenades(extra=["m_VoxelFrameData"], grenades=False, ticks=[60000, 60064]).
+
+    Example: parser.parse_grenades(extra=["m_firePositions", "m_fireCount"], grenades=True)
+       entity_id grenade_type  m_fireCount                                    m_firePositions     name            steamid   tick        x       y       z
+    0        371     CInferno           23  [[-1232.5, 356.1, -165.2], [-1201.8, 350.4, ...  player1  76561111111111111  42010      NaN     NaN     NaN
+<br/><br/>
+```Python
+def parse_weapons(extra=None, ticks=None): -> DataFrame
+```
+Returns weapons lying on the ground (no owner): dropped on death, thrown with the drop key or never picked up. One row per weapon per tick; steamid/name refer to the player who dropped it. "extra" adds fields of the weapon entity, for example m_nDropTick. "ticks" restricts the output to these ticks.

@@ -66,7 +66,6 @@ pub fn parseEvent(
         parse_ents: true,
         wanted_ticks: vec![],
         parse_projectiles: false,
-        only_header: false,
         list_props: false,
         only_convars: false,
         huffman_lookup_table: &arc_huf,
@@ -74,6 +73,8 @@ pub fn parseEvent(
         wanted_prop_states: HashMap::default().into(),
         fallback_bytes: None,
         parse_grenades: false,
+        parse_weapons: false,
+        vector_props_as_lists: false,
         grenade_classes: None,
     };
     let mut parser = Parser::new(settings, ForceSingleThreaded);
@@ -134,7 +135,6 @@ pub fn parseEvents(
         parse_ents: true,
         wanted_ticks: vec![],
         parse_projectiles: false,
-        only_header: false,
         list_props: false,
         only_convars: false,
         huffman_lookup_table: &arc_huf,
@@ -142,6 +142,8 @@ pub fn parseEvents(
         wanted_prop_states: HashMap::default().into(),
         fallback_bytes: None,
         parse_grenades: false,
+        parse_weapons: false,
+        vector_props_as_lists: false,
         grenade_classes: None,
     };
     let mut parser = Parser::new(settings, ForceSingleThreaded);
@@ -170,7 +172,6 @@ pub fn listGameEvents(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
         parse_ents: false,
         wanted_ticks: vec![],
         parse_projectiles: false,
-        only_header: false,
         list_props: false,
         only_convars: false,
         huffman_lookup_table: &arc_huf.clone(),
@@ -178,6 +179,8 @@ pub fn listGameEvents(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
         wanted_prop_states: HashMap::default().into(),
         fallback_bytes: None,
         parse_grenades: false,
+        parse_weapons: false,
+        vector_props_as_lists: false,
         grenade_classes: None,
     };
     let mut parser = Parser::new(settings, ForceSingleThreaded);
@@ -206,7 +209,6 @@ pub fn listUpdatedFields(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
         parse_ents: true,
         wanted_ticks: vec![],
         parse_projectiles: false,
-        only_header: false,
         list_props: true,
         only_convars: false,
         huffman_lookup_table: &arc_huf.clone(),
@@ -214,6 +216,8 @@ pub fn listUpdatedFields(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
         wanted_prop_states: HashMap::default().into(),
         fallback_bytes: None,
         parse_grenades: false,
+        parse_weapons: false,
+        vector_props_as_lists: false,
         grenade_classes: None,
     };
     let mut parser = Parser::new(settings, ForceSingleThreaded);
@@ -272,7 +276,6 @@ pub fn parseTicks(
         parse_ents: true,
         wanted_ticks: wanted_ticks,
         parse_projectiles: false,
-        only_header: false,
         list_props: false,
         only_convars: false,
         huffman_lookup_table: &arc_huf.clone(),
@@ -280,6 +283,8 @@ pub fn parseTicks(
         wanted_prop_states: HashMap::default().into(),
         fallback_bytes: None,
         parse_grenades: false,
+        parse_weapons: false,
+        vector_props_as_lists: false,
         grenade_classes: None,
     };
     let mut parser = Parser::new(settings, ForceSingleThreaded);
@@ -361,7 +366,6 @@ pub fn parseTickRange(
         parse_ents: true,
         wanted_ticks: vec![],
         parse_projectiles: false,
-        only_header: false,
         list_props: false,
         only_convars: false,
         huffman_lookup_table: &arc_huf.clone(),
@@ -369,6 +373,8 @@ pub fn parseTickRange(
         wanted_prop_states: HashMap::default().into(),
         fallback_bytes: None,
         parse_grenades: false,
+        parse_weapons: false,
+        vector_props_as_lists: false,
         grenade_classes: None,
     };
     let parser = Parser::new(settings, ForceSingleThreaded);
@@ -411,17 +417,19 @@ pub fn parseTickRange(
 }
 /// extra: lets you add new fields to grenades. Use list_updated_fields for a full list.
 /// grenades: lets you disable non-projectile grenades. This can have a big difference on memory/speed.
+/// ticks: restricts the output to these ticks (sample big fields like m_VoxelFrameData instead of every tick).
 /// grenade_classes: when grenades is enabled, only emit rows for these non-projectile
 /// grenade classes (e.g. inferno flames). Omit to emit every non-projectile class.
 /// skip_nones: when true, omit missing props from rows instead of emitting explicit nulls.
 /// Grenade rows are heterogeneous (projectiles have no fire props, burns have no
-/// coordinates), so with wide extras like the 64 CInferno fire nodes explicit nulls
-/// multiply every row. Defaults to false to preserve legacy null behavior.
+/// coordinates), so with wide extras (e.g. m_firePositions) explicit nulls multiply
+/// every row. Defaults to false to preserve legacy null behavior.
 #[wasm_bindgen]
 pub fn parseGrenades(
     file: Vec<u8>,
     extra: Option<Vec<JsValue>>,
     grenades: Option<bool>,
+    ticks: Option<Vec<i32>>,
     grenade_classes: Option<Vec<JsValue>>,
     skip_nones: Option<bool>,
 ) -> Result<JsValue, JsError> {
@@ -452,9 +460,8 @@ pub fn parseGrenades(
         collect_ticks: true,
         parse_voice: false,
         parse_ents: true,
-        wanted_ticks: vec![],
+        wanted_ticks: ticks.unwrap_or_default(),
         parse_projectiles: true,
-        only_header: false,
         list_props: false,
         only_convars: false,
         huffman_lookup_table: &arc_huf.clone(),
@@ -462,6 +469,8 @@ pub fn parseGrenades(
         wanted_prop_states: HashMap::default().into(),
         fallback_bytes: None,
         parse_grenades: grenades,
+        parse_weapons: false,
+        vector_props_as_lists: true,
         grenade_classes: grenade_classes,
     };
     let mut parser = Parser::new(settings, ForceSingleThreaded);
@@ -478,10 +487,69 @@ pub fn parseGrenades(
     };
     // Grenade rows are heterogeneous (projectiles have no fire props, burns
     // have no coordinates). When skip_nones is set, missing props are omitted
-    // rather than emitted as nulls: with wide extras like the 64 CInferno fire
-    // nodes, explicit nulls would multiply every row by the extra count.
-    // Defaults to false to preserve legacy null behavior.
+    // rather than emitted as nulls: with wide extras, explicit nulls would
+    // multiply every row. Defaults to false to preserve legacy null behavior.
     let result = soa_to_aos(helper, skip_nones);
+    let s = match serde_wasm_bindgen::to_value(&result) {
+        Ok(s) => s,
+        Err(e) => return Err(JsError::new(&format!("{}", e))),
+    };
+    Ok(s)
+}
+
+/// Weapons lying on the ground (no owner): dropped on death, thrown with the drop key or
+/// never picked up. One row per weapon per tick; steamid/name refer to the player who dropped it.
+/// extra: fields of the weapon entity (e.g. m_nDropTick). ticks: restrict the output to these ticks.
+#[wasm_bindgen]
+pub fn parseWeapons(file: Vec<u8>, extra: Option<Vec<JsValue>>, ticks: Option<Vec<i32>>) -> Result<JsValue, JsError> {
+    let extra = match extra {
+        Some(p) => p.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>(),
+        None => vec![],
+    };
+    let real_names = match rm_user_friendly_names(&extra) {
+        Ok(names) => names,
+        Err(e) => return Err(JsError::new(&format!("{}", e))),
+    };
+    let mut real_name_to_og_name = HashMap::default();
+    for (real_name, user_friendly_name) in real_names.iter().zip(&extra) {
+        real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
+    }
+
+    let arc_huf = Arc::new(create_huffman_lookup_table());
+    let settings = ParserInputs {
+        wanted_players: vec![],
+        real_name_to_og_name: real_name_to_og_name.into(),
+        wanted_player_props: vec![],
+        wanted_other_props: real_names.clone(),
+        wanted_events: vec![],
+        collect_ticks: true,
+        parse_voice: false,
+        parse_ents: true,
+        wanted_ticks: ticks.unwrap_or_default(),
+        parse_projectiles: false,
+        list_props: false,
+        only_convars: false,
+        huffman_lookup_table: &arc_huf.clone(),
+        order_by_steamid: false,
+        wanted_prop_states: HashMap::default().into(),
+        fallback_bytes: None,
+        parse_grenades: false,
+        parse_weapons: true,
+        vector_props_as_lists: true,
+        grenade_classes: None,
+    };
+    let mut parser = Parser::new(settings, ForceSingleThreaded);
+    let output = match parser.parse_demo(&file) {
+        Ok(output) => output,
+        Err(e) => return Err(JsError::new(&format!("{}", e))),
+    };
+    let mut prop_infos = output.prop_controller.prop_infos.clone();
+    prop_infos.sort_by_key(|x| x.prop_name.clone());
+    let helper = OutputSerdeHelperStruct {
+        prop_infos: prop_infos,
+        inner: output.df.into(),
+    };
+    let result = soa_to_aos(helper, false);
     let s = match serde_wasm_bindgen::to_value(&result) {
         Ok(s) => s,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
@@ -504,7 +572,6 @@ pub fn parseHeader(file: Vec<u8>) -> Result<JsValue, JsError> {
         parse_ents: false,
         wanted_ticks: vec![],
         parse_projectiles: true,
-        only_header: true,
         list_props: false,
         only_convars: false,
         huffman_lookup_table: &arc_huf.clone(),
@@ -512,6 +579,8 @@ pub fn parseHeader(file: Vec<u8>) -> Result<JsValue, JsError> {
         wanted_prop_states: HashMap::default().into(),
         fallback_bytes: None,
         parse_grenades: false,
+        parse_weapons: false,
+        vector_props_as_lists: false,
         grenade_classes: None,
     };
     let mut parser = FirstPassParser::new(&settings);
@@ -638,7 +707,6 @@ impl ChunkParser {
                 parse_ents: true,
                 wanted_ticks: vec![],
                 parse_projectiles: true,
-                only_header: false,
                 list_props: false,
                 only_convars: false,
                 huffman_lookup_table: huf,
@@ -646,6 +714,8 @@ impl ChunkParser {
                 wanted_prop_states: HashMap::default().into(),
                 fallback_bytes: None,
                 parse_grenades: opts.non_projectile_grenades.unwrap_or(true),
+                parse_weapons: false,
+                vector_props_as_lists: true,
                 grenade_classes: opts.grenade_classes,
             }
         } else {
@@ -660,7 +730,6 @@ impl ChunkParser {
                 parse_ents: true,
                 wanted_ticks: wanted_ticks.unwrap_or_default(),
                 parse_projectiles: false,
-                only_header: false,
                 list_props: false,
                 only_convars: false,
                 huffman_lookup_table: huf,
@@ -668,6 +737,8 @@ impl ChunkParser {
                 wanted_prop_states: HashMap::default().into(),
                 fallback_bytes: None,
                 parse_grenades: false,
+                parse_weapons: false,
+                vector_props_as_lists: false,
                 grenade_classes: None,
             }
         };

@@ -5,7 +5,6 @@ edition = "2021"
 publish = false
 
 [dependencies]
-bitter = "0.7.0"
 prost = "0.13.3"
 snap = "1.1.0"
 ahash = "0.8.3"
