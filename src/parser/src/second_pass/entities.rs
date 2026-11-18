@@ -262,6 +262,10 @@ fn compute_bound(ser: &Serializer, needed: &NeededSet) -> Option<PathBound> {
 const NSERIALBITS: u32 = 17;
 const STOP_READING_SYMBOL: u8 = 39;
 const HUFFMAN_CODE_MAXLEN: u32 = 17;
+/// Upper bound for a collected array/vector length or element index. Both come from demo bytes,
+/// so an untrusted value must not size an allocation or make an element write grow one without
+/// bound. Far above real values (m_firePositions is 64, smoke VoxelFrameData is a few thousand).
+const MAX_COLLECTED_VEC_LEN: usize = 65536;
 
 #[derive(Debug, Clone)]
 pub struct Entity {
@@ -793,9 +797,10 @@ impl<'a> SecondPassParser<'a> {
         };
         if fi.vec_size {
             // Element count of a collected vector: shrink (elements past the count are stale)
-            // or make room. Elements arrive as separate updates below.
+            // or make room. Elements arrive as separate updates below. The count comes from
+            // demo bytes; cap it before using it as a length or allocation size.
             let n = match result {
-                Variant::U32(n) => n as usize,
+                Variant::U32(n) => (n as usize).min(MAX_COLLECTED_VEC_LEN),
                 _ => return,
             };
             match entity.props.get_mut(&fi.prop_id) {
@@ -816,7 +821,7 @@ impl<'a> SecondPassParser<'a> {
             // A larger index can only come from a corrupt/hostile demo; drop the element so it
             // cannot force an unbounded allocation. The value was already decoded, so skipping
             // the store leaves the bitstream in sync.
-            if idx > 65536 {
+            if idx >= MAX_COLLECTED_VEC_LEN {
                 return;
             }
             if fi.vec_bytes {

@@ -4288,6 +4288,47 @@ mod tests {
         assert_eq!(out.0.df[&prop_id], prop.1);
     }
     #[test]
+    fn stamina_matches_movement_services_prop() {
+        let huf = create_huffman_lookup_table();
+        let raw = "CCSPlayerPawn.CCSPlayer_MovementServices.m_flStamina".to_string();
+        let settings = ParserInputs {
+            wanted_players: vec![],
+            real_name_to_og_name: AHashMap::default(),
+            wanted_player_props: vec!["stamina".to_string(), raw.clone()],
+            wanted_other_props: vec![],
+            wanted_events: vec![],
+            wanted_ticks: vec![2100, 20000],
+            parse_ents: true,
+            collect_ticks: true,
+            parse_voice: false,
+            parse_projectiles: false,
+            parse_grenades: false,
+            parse_weapons: false,
+            vector_props_as_lists: false,
+            grenade_classes: None,
+            list_props: false,
+            only_convars: false,
+            huffman_lookup_table: &huf,
+            order_by_steamid: false,
+            wanted_prop_states: AHashMap::default(),
+            fallback_bytes: None,
+        };
+        let mut ds = Parser::new(settings, crate::parse_demo::ParsingMode::ForceSingleThreaded);
+        let file = File::open("test_demo.dem").unwrap();
+        let mmap = unsafe { MmapOptions::new().map(&file).unwrap() };
+        let output = ds.parse_demo(&mmap).unwrap();
+        let raw_id = output.prop_controller.name_to_id[&raw];
+        let stamina = output.df[&STAMINA_ID].data.clone();
+        assert_eq!(stamina, output.df[&raw_id].data);
+        match stamina {
+            Some(F32(values)) => assert!(
+                values.iter().any(|v| matches!(v, Some(stamina) if *stamina != 0.0)),
+                "stamina must come from the movement-services prop, not an all-zero fill"
+            ),
+            other => panic!("stamina column: {:?}", other),
+        }
+    }
+    #[test]
     fn velocity_at_sparse_ticks() {
         // Row 11 is the second player at tick 20000. The previous output
         // tick was 10000, but velocity still comes from ticks 19998 and 19999.
