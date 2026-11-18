@@ -44,12 +44,16 @@ pub struct ParserInputs<'a> {
     pub parse_ents: bool,
     pub parse_projectiles: bool,
     pub parse_grenades: bool,
+    pub parse_weapons: bool,
+    /// Array/vector props the user asked for come back whole (Variant::List / Bytes) instead
+    /// of the last written element. parse_grenades/parse_weapons only: parse_ticks keeps
+    /// scalars ("total_ammo_left" is m_pReserveAmmo[0]).
+    pub vector_props_as_lists: bool,
     /// Non-projectile grenade classes to emit rows for when `parse_grenades`
     /// is set (e.g. smoke clouds, inferno flames). Projectile classes are
     /// always emitted. `None` preserves the legacy behavior of emitting
     /// every non-projectile class.
     pub grenade_classes: Option<Vec<String>>,
-    pub only_header: bool,
     pub only_convars: bool,
     pub huffman_lookup_table: &'a Vec<(u8, u8)>,
     pub order_by_steamid: bool,
@@ -90,11 +94,15 @@ pub struct FirstPassParser<'a> {
     pub parse_entities: bool,
     pub parse_projectiles: bool,
     pub parse_grenades: bool,
+    pub parse_weapons: bool,
+    /// Array/vector props the user asked for come back whole (Variant::List / Bytes) instead
+    /// of the last written element. parse_grenades/parse_weapons only: parse_ticks keeps
+    /// scalars ("total_ammo_left" is m_pReserveAmmo[0]).
+    pub vector_props_as_lists: bool,
     pub name_to_id: AHashMap<String, u32>,
     pub id: u32,
     pub wanted_prop_ids: Vec<u32>,
     pub controller_ids: SpecialIDs,
-    pub only_header: bool,
     pub prop_infos: Vec<PropInfo>,
     pub header: AHashMap<String, String>,
     pub is_multithreadable: bool,
@@ -140,7 +148,6 @@ impl<'a> FirstPassParser<'a> {
             added_temp_props: vec![],
             is_multithreadable: check_multithreadability(&inputs.wanted_player_props),
             stringtable_players: BTreeMap::default(),
-            only_header: inputs.only_header,
             ge_list_set: false,
             cls_by_id_set: false,
             qf_map_set: false,
@@ -153,6 +160,8 @@ impl<'a> FirstPassParser<'a> {
                 false,
                 &vec!["None".to_string()],
                 inputs.parse_projectiles,
+                inputs.parse_weapons,
+                inputs.vector_props_as_lists,
             ),
             cls_by_id: None,
             player_md: vec![],
@@ -174,6 +183,8 @@ impl<'a> FirstPassParser<'a> {
             serializers: AHashMap::default(),
             parse_projectiles: inputs.parse_projectiles,
             parse_grenades: inputs.parse_grenades,
+            parse_weapons: inputs.parse_weapons,
+            vector_props_as_lists: inputs.vector_props_as_lists,
             wanted_player_props: inputs.wanted_player_props.clone(),
             wanted_events: inputs.wanted_events.clone(),
             wanted_players: AHashSet::from_iter(inputs.wanted_players.iter().cloned()),

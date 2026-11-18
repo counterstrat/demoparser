@@ -358,7 +358,7 @@ impl<'a> FirstPassParser<'a> {
         self.header.insert("addons".to_string(), header.addons().to_string());
         Ok(())
     }
-    fn handle_short_header(&mut self, file_len: usize, bytes: &[u8]) -> Result<(), DemoParserError> {
+    fn handle_short_header(&mut self, _file_len: usize, bytes: &[u8]) -> Result<(), DemoParserError> {
         if bytes.len() < 16 {
             return Err(DemoParserError::OutOfBytesError);
         }
@@ -376,7 +376,7 @@ impl<'a> FirstPassParser<'a> {
         };
         // hmmmm not sure where the 18 comes from if the header is only 16?
         // can be used to check that file ends early
-        let file_length_expected = match bytes[8..12].try_into() {
+        let _file_length_expected = match bytes[8..12].try_into() {
             Err(_) => return Err(DemoParserError::OutOfBytesError),
             Ok(arr) => u32::from_le_bytes(arr) + 18,
         };

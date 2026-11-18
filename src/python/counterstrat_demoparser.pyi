@@ -40,6 +40,13 @@ class DemoParser:
         grenades: bool = True,
         grenade_classes: Optional[Sequence[str]] = None,
         skip_nones: bool = False,
+        ticks: Optional[Sequence[int]] = None,
+    ) -> pd.DataFrame: ...
+    def parse_weapons(
+        self,
+        *,
+        extra: Optional[Sequence[str]] = None,
+        ticks: Optional[Sequence[int]] = None,
     ) -> pd.DataFrame: ...
     def parse_player_info(self) -> pd.DataFrame: ...
     def parse_item_drops(self) -> pd.DataFrame: ...

@@ -24,6 +24,11 @@ pub enum Variant {
     Stickers(Vec<Sticker>),
     InputHistory(Vec<InputHistory>),
     UserCmdSubtickMoves(Vec<UserCmdSubtickMove>),
+    /// Whole array/vector field of an entity (one element per index), e.g.
+    /// CInferno.m_firePositions. uint8 arrays/vectors use Bytes instead.
+    List(Vec<Variant>),
+    /// Whole uint8 array/vector field of an entity, e.g. CSmokeGrenadeProjectile.m_VoxelFrameData.
+    Bytes(Vec<u8>),
 }
 
 impl Variant {
@@ -95,6 +100,67 @@ pub enum VarVec {
     Stickers(Vec<Vec<Sticker>>),
     InputHistory(Vec<Vec<InputHistory>>),
     UserCmdSubtickMoves(Vec<Vec<UserCmdSubtickMove>>),
+    List(Vec<Vec<Variant>>),
+    Bytes(Vec<Vec<u8>>),
+    /// Dictionary-encoded strings: few distinct values repeated over many rows (names, types).
+    StrDict(StrDict),
+}
+
+/// String column stored as codes into a table of distinct values. `push_str` doesn't allocate
+/// once a value has been seen.
+#[derive(Debug, Clone, Default)]
+pub struct StrDict {
+    /// Index into `values`, or `StrDict::NONE`.
+    pub codes: Vec<u32>,
+    pub values: Vec<String>,
+    index: ahash::AHashMap<String, u32>,
+}
+
+impl PartialEq for StrDict {
+    fn eq(&self, other: &Self) -> bool {
+        self.codes.len() == other.codes.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl StrDict {
+    pub const NONE: u32 = u32::MAX;
+    #[inline]
+    pub fn code_of(&mut self, s: &str) -> u32 {
+        if let Some(&c) = self.index.get(s) {
+            return c;
+        }
+        let c = self.values.len() as u32;
+        self.values.push(s.to_string());
+        self.index.insert(s.to_string(), c);
+        c
+    }
+    #[inline]
+    pub fn push_str(&mut self, s: &str) {
+        let c = self.code_of(s);
+        self.codes.push(c);
+    }
+    #[inline]
+    pub fn push_none(&mut self) {
+        self.codes.push(StrDict::NONE);
+    }
+    pub fn get(&self, row: usize) -> Option<&str> {
+        self.values.get(self.codes[row] as usize).map(|s| s.as_str())
+    }
+    pub fn iter(&self) -> impl Iterator<Item = Option<&str>> + '_ {
+        self.codes.iter().map(|&c| self.values.get(c as usize).map(|s| s.as_str()))
+    }
+    /// Append `other`, remapping its codes into this table.
+    pub fn append(&mut self, other: &StrDict) {
+        let remap: Vec<u32> = other.values.iter().map(|v| self.code_of(v)).collect();
+        self.codes.extend(other.codes.iter().map(|&c| if c == StrDict::NONE { c } else { remap[c as usize] }));
+    }
+    pub fn slice_to_new(&self, rows: &[usize]) -> StrDict {
+        StrDict {
+            codes: rows.iter().map(|&r| self.codes[r]).collect(),
+            values: self.values.clone(),
+            index: self.index.clone(),
+        }
+    }
 }
 
 impl VarVec {
@@ -114,14 +180,28 @@ impl VarVec {
             Variant::Stickers(_) => VarVec::Stickers(vec![]),
             Variant::InputHistory(_) => VarVec::InputHistory(vec![]),
             Variant::UserCmdSubtickMoves(_) => VarVec::UserCmdSubtickMoves(vec![]),
+            Variant::List(_) => VarVec::List(vec![]),
+            Variant::Bytes(_) => VarVec::Bytes(vec![]),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct PropColumn {
     pub data: Option<VarVec>,
     pub num_nones: usize,
+}
+
+/// A String column and a StrDict column holding the same values are the same column.
+impl PartialEq for PropColumn {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.data, &other.data) {
+            (Some(VarVec::StrDict(d)), Some(VarVec::String(v))) | (Some(VarVec::String(v)), Some(VarVec::StrDict(d))) => {
+                d.codes.len() == v.len() && d.iter().eq(v.iter().map(|x| x.as_deref()))
+            }
+            (a, b) => a == b && self.num_nones == other.num_nones,
+        }
+    }
 }
 
 impl PropColumn {
@@ -144,6 +224,9 @@ impl PropColumn {
             Some(VarVec::Stickers(b)) => VarVec::Stickers(indicies.iter().map(|x| b[*x].to_owned()).collect_vec()),
             Some(VarVec::InputHistory(b)) => VarVec::InputHistory(indicies.iter().map(|x| b[*x].to_owned()).collect_vec()),
             Some(VarVec::UserCmdSubtickMoves(b)) => VarVec::UserCmdSubtickMoves(indicies.iter().map(|x| b[*x].to_owned()).collect_vec()),
+            Some(VarVec::List(b)) => VarVec::List(indicies.iter().map(|x| b[*x].to_owned()).collect_vec()),
+            Some(VarVec::Bytes(b)) => VarVec::Bytes(indicies.iter().map(|x| b[*x].to_owned()).collect_vec()),
+            Some(VarVec::StrDict(b)) => VarVec::StrDict(b.slice_to_new(indicies)),
             None => {
                 return Some(PropColumn {
                     data: None,
@@ -172,6 +255,9 @@ impl PropColumn {
             Some(VarVec::Stickers(b)) => b.len(),
             Some(VarVec::InputHistory(b)) => b.len(),
             Some(VarVec::UserCmdSubtickMoves(b)) => b.len(),
+            Some(VarVec::List(b)) => b.len(),
+            Some(VarVec::Bytes(b)) => b.len(),
+            Some(VarVec::StrDict(b)) => b.codes.len(),
             None => self.num_nones,
         }
     }
@@ -214,6 +300,7 @@ impl PropColumn {
                 Some(VarVec::String(v_other)) => {
                     v.extend_from_slice(&v_other);
                 }
+                Some(VarVec::StrDict(d)) => v.extend(d.iter().map(|x| x.map(|x| x.to_string()))),
                 None => {
                     for _ in 0..other.num_nones {
                         v.push(None);
@@ -331,7 +418,50 @@ impl PropColumn {
                 }
                 _ => {}
             },
+            Some(VarVec::List(v)) => match &other.data {
+                Some(VarVec::List(v_other)) => {
+                    v.extend_from_slice(&v_other);
+                }
+                None => {
+                    for _ in 0..other.num_nones {
+                        v.push(vec![]);
+                    }
+                }
+                _ => {}
+            },
+            Some(VarVec::Bytes(v)) => match &other.data {
+                Some(VarVec::Bytes(v_other)) => {
+                    v.extend_from_slice(&v_other);
+                }
+                None => {
+                    for _ in 0..other.num_nones {
+                        v.push(vec![]);
+                    }
+                }
+                _ => {}
+            },
+            Some(VarVec::StrDict(v)) => match &other.data {
+                Some(VarVec::StrDict(v_other)) => v.append(v_other),
+                Some(VarVec::String(v_other)) => {
+                    for x in v_other {
+                        match x {
+                            Some(x) => v.push_str(x),
+                            None => v.push_none(),
+                        }
+                    }
+                }
+                None => {
+                    for _ in 0..other.num_nones {
+                        v.push_none();
+                    }
+                }
+                _ => {}
+            },
             None => match &other.data {
+                Some(VarVec::StrDict(_inner)) => {
+                    self.resolve_vec_type(PropColumn::get_type(&other.data));
+                    self.extend_from(other);
+                }
                 Some(VarVec::Bool(_inner)) => {
                     self.resolve_vec_type(PropColumn::get_type(&other.data));
                     self.extend_from(other);
@@ -388,6 +518,14 @@ impl PropColumn {
                     self.resolve_vec_type(PropColumn::get_type(&other.data));
                     self.extend_from(other);
                 }
+                Some(VarVec::List(_inner)) => {
+                    self.resolve_vec_type(PropColumn::get_type(&other.data));
+                    self.extend_from(other);
+                }
+                Some(VarVec::Bytes(_inner)) => {
+                    self.resolve_vec_type(PropColumn::get_type(&other.data));
+                    self.extend_from(other);
+                }
                 None => {
                     self.num_nones += other.num_nones;
                 }
@@ -411,6 +549,9 @@ impl PropColumn {
             Some(VarVec::U32Vec(_)) => Some(11),
             Some(VarVec::InputHistory(_)) => Some(12),
             Some(VarVec::UserCmdSubtickMoves(_)) => Some(13),
+            Some(VarVec::List(_)) => Some(14),
+            Some(VarVec::Bytes(_)) => Some(15),
+            Some(VarVec::StrDict(_)) => Some(16),
 
             None => None,
         }
@@ -434,10 +575,40 @@ impl PropColumn {
             Some(11) => self.data = Some(VarVec::U32Vec(vec![])),
             Some(12) => self.data = Some(VarVec::InputHistory(vec![])),
             Some(13) => self.data = Some(VarVec::UserCmdSubtickMoves(vec![])),
+            Some(14) => self.data = Some(VarVec::List(vec![])),
+            Some(15) => self.data = Some(VarVec::Bytes(vec![])),
+            Some(16) => self.data = Some(VarVec::StrDict(StrDict::default())),
             _ => {}
         }
         for _ in 0..self.num_nones {
             self.push(None);
+        }
+    }
+    /// Empty dictionary-encoded string column.
+    pub fn new_str_dict() -> Self {
+        PropColumn {
+            data: Some(VarVec::StrDict(StrDict::default())),
+            num_nones: 0,
+        }
+    }
+    /// Push a string without allocating (dictionary column), or as a String otherwise.
+    #[inline(always)]
+    pub fn push_str(&mut self, s: Option<&str>) {
+        match (&mut self.data, s) {
+            (Some(VarVec::StrDict(d)), Some(s)) => d.push_str(s),
+            (Some(VarVec::StrDict(d)), None) => d.push_none(),
+            (None, None) => self.num_nones += 1,
+            // First value of an untyped column: start a dictionary column.
+            (None, Some(s)) => {
+                let mut d = StrDict::default();
+                for _ in 0..self.num_nones {
+                    d.push_none();
+                }
+                self.num_nones = 0;
+                d.push_str(s);
+                self.data = Some(VarVec::StrDict(d));
+            }
+            (_, s) => self.push(s.map(|s| Variant::String(s.to_string()))),
         }
     }
     #[inline(always)]
@@ -520,6 +691,14 @@ impl VarVec {
                 VarVec::UserCmdSubtickMoves(f) => f.push(p),
                 _ => {}
             },
+            Some(Variant::List(p)) => match self {
+                VarVec::List(f) => f.push(p),
+                _ => {}
+            },
+            Some(Variant::Bytes(p)) => match self {
+                VarVec::Bytes(f) => f.push(p),
+                _ => {}
+            },
             None => self.push_none(),
         }
     }
@@ -539,6 +718,9 @@ impl VarVec {
             VarVec::Stickers(f) => f.push(vec![]),
             VarVec::InputHistory(f) => f.push(vec![]),
             VarVec::UserCmdSubtickMoves(f) => f.push(vec![]),
+            VarVec::List(f) => f.push(vec![]),
+            VarVec::Bytes(f) => f.push(vec![]),
+            VarVec::StrDict(d) => d.push_none(),
         }
     }
 }
@@ -612,6 +794,20 @@ impl Serialize for Variant {
                 let mut s = serializer.serialize_seq(Some(v.len()))?;
                 for item in v {
                     s.serialize_element(&item)?;
+                }
+                s.end()
+            }
+            Variant::List(v) => {
+                let mut s = serializer.serialize_seq(Some(v.len()))?;
+                for item in v {
+                    s.serialize_element(item)?;
+                }
+                s.end()
+            }
+            Variant::Bytes(v) => {
+                let mut s = serializer.serialize_seq(Some(v.len()))?;
+                for item in v {
+                    s.serialize_element(item)?;
                 }
                 s.end()
             }
@@ -896,6 +1092,36 @@ pub fn soa_to_aos(
                         }
                     },
                 },
+                Some(VarVec::List(val)) => match val.get(idx) {
+                    Some(f) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::List(f.clone()))),
+                    _ => {
+                        if skip_nones {
+                            None
+                        } else {
+                            hm.insert(prop_info.prop_friendly_name.clone(), None)
+                        }
+                    },
+                },
+                Some(VarVec::Bytes(val)) => match val.get(idx) {
+                    Some(f) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::Bytes(f.clone()))),
+                    _ => {
+                        if skip_nones {
+                            None
+                        } else {
+                            hm.insert(prop_info.prop_friendly_name.clone(), None)
+                        }
+                    },
+                },
+                Some(VarVec::StrDict(d)) => match (idx < d.codes.len()).then(|| d.get(idx)).flatten() {
+                    Some(f) => hm.insert(prop_info.prop_friendly_name.clone(), Some(Variant::String(f.to_string()))),
+                    _ => {
+                        if skip_nones {
+                            None
+                        } else {
+                            hm.insert(prop_info.prop_friendly_name.clone(), None)
+                        }
+                    },
+                },
             };
         }
         v.push(hm);
@@ -972,6 +1198,16 @@ impl Serialize for OutputSerdeHelperStruct {
                 }
                 Some(VarVec::UserCmdSubtickMoves(val)) => {
                     map.serialize_entry(&prop_info.prop_friendly_name, val)?;
+                }
+                Some(VarVec::List(val)) => {
+                    map.serialize_entry(&prop_info.prop_friendly_name, val)?;
+                }
+                Some(VarVec::Bytes(val)) => {
+                    map.serialize_entry(&prop_info.prop_friendly_name, val)?;
+                }
+                Some(VarVec::StrDict(d)) => {
+                    let as_vec: Vec<Option<&str>> = d.iter().collect();
+                    map.serialize_entry(&prop_info.prop_friendly_name, &as_vec)?;
                 }
                 Some(VarVec::U64Vec(val)) => {
                     let string_sid = val

@@ -1,4 +1,4 @@
-use crate::first_pass::frameparser::{FrameParser, StartEndOffset, StartEndType};
+use crate::first_pass::frameparser::{StartEndOffset, StartEndType};
 use crate::first_pass::parser::SharedFirstPass;
 use crate::first_pass::parser_settings::check_multithreadability;
 use crate::first_pass::parser_settings::continuous_decode_required;
@@ -18,9 +18,6 @@ use itertools::Itertools;
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::prelude::ParallelIterator;
-use std::sync::mpsc::{channel, Receiver};
-use std::thread;
-use std::time::Duration;
 
 pub const HEADER_ENDS_AT_BYTE: usize = 16;
 
@@ -195,6 +192,9 @@ fn dummy_for(data: &VarVec) -> Variant {
         VarVec::Stickers(_) => Variant::Stickers(vec![]),
         VarVec::InputHistory(_) => Variant::InputHistory(vec![]),
         VarVec::UserCmdSubtickMoves(_) => Variant::UserCmdSubtickMoves(vec![]),
+        VarVec::List(_) => Variant::List(vec![]),
+        VarVec::Bytes(_) => Variant::Bytes(vec![]),
+        VarVec::StrDict(_) => Variant::String(String::new()),
     }
 }
 
@@ -495,7 +495,7 @@ impl<'a> Parser<'a> {
                 v
             };
             #[cfg(not(target_arch = "wasm32"))]
-            let mut outputs: Vec<SecondPassOutput> = selected
+            let outputs: Vec<SecondPassOutput> = selected
                 .par_iter()
                 .map(|offset| {
                     let mut parser = SecondPassParser::new(&shared, &self.input, *offset, false, None)?;
@@ -990,81 +990,6 @@ impl<'a> Parser<'a> {
         if let Some(t0) = t.as_ref() {
             eprintln!("[prof] post-proc: {:.3}s", t0.elapsed().as_secs_f64());
         }
-        Ok(outputs)
-    }
-    fn second_pass_threaded_with_channels(
-        &self,
-        outer_bytes: &[u8],
-        shared: &SharedFirstPass,
-        receiver: Receiver<StartEndOffset>,
-    ) -> Result<DemoOutput, DemoParserError> {
-        thread::scope(|s| {
-            let mut handles = vec![];
-            let mut channel_threading_was_ok = true;
-            let input = &self.input;
-            let shared_ref = shared;
-            loop {
-                if let Ok(start_end_offset) = receiver.recv_timeout(Duration::from_secs(3)) {
-                    match start_end_offset.msg_type {
-                        StartEndType::EndOfMessages => break,
-                        StartEndType::OK => {}
-                        StartEndType::MultithreadingWasNotOk => {
-                            channel_threading_was_ok = false;
-                            break;
-                        }
-                    }
-                    handles.push(s.spawn(move || {
-                        let mut parser = SecondPassParser::new(shared_ref, input, start_end_offset.start, false, Some(start_end_offset))?;
-                        parser.start(outer_bytes)?;
-                        Ok(parser.create_output())
-                    }));
-                } else {
-                    channel_threading_was_ok = false;
-                    break;
-                }
-            }
-            // Fallback if channels failed to find all fullpackets. Should be rare.
-            if !channel_threading_was_ok {
-                let shared = FirstPassParser::new(&self.input).parse_demo(outer_bytes, false)?;
-                return self.second_pass_multi_threaded_no_channels(outer_bytes, shared);
-            }
-            // check for errors
-            let mut ok = vec![];
-            for result in handles {
-                match result.join() {
-                    Err(_e) => return Err(DemoParserError::MalformedMessage),
-                    Ok(r) => {
-                        ok.push(r?);
-                    }
-                };
-            }
-        let mut outputs = self.combine_chunks(&mut ok, shared);
-            Parser::add_item_purchase_sell_column(&mut outputs.game_events);
-            Parser::remove_item_sold_events(&mut outputs.game_events);
-            return Ok(outputs);
-        })
-    }
-    fn second_pass_multi_threaded_no_channels(&self, outer_bytes: &[u8], shared: SharedFirstPass) -> Result<DemoOutput, DemoParserError> {
-        let second_pass_outputs: Vec<Result<SecondPassOutput, DemoParserError>> = shared
-            .fullpacket_offsets
-            .par_iter()
-            .map(|offset| {
-                let mut parser = SecondPassParser::new(&shared, &self.input, *offset, false, None)?;
-                parser.start(outer_bytes)?;
-                Ok(parser.create_output())
-            })
-            .collect();
-        // check for errors
-        let mut ok = vec![];
-        for result in second_pass_outputs {
-            match result {
-                Err(e) => return Err(e),
-                Ok(r) => ok.push(r),
-            };
-        }
-        let mut outputs = self.combine_chunks(&mut ok, &shared);
-        Parser::add_item_purchase_sell_column(&mut outputs.game_events);
-        Parser::remove_item_sold_events(&mut outputs.game_events);
         Ok(outputs)
     }
     fn remove_item_sold_events(events: &mut Vec<GameEvent>) {
