@@ -1,0 +1,435 @@
+name: Release
+
+# Wheels only for 0.1.0: no sdist is published, matching the retired deploy.yml.
+# Retry a failed run from the GitHub Release UI by re-running this workflow, and
+# publish a new version by cutting a new Release tag. There is no workflow_dispatch.
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  version-guard:
+    name: Check release tag matches package versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Compare release tag with package versions
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)(\.[0-9]+)?)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tag '$RELEASE_TAG' is not a vX.Y.Z version (optionally with an alpha, beta or rc prerelease and build metadata)."
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+
+          node_version="$(node -p "require('./src/node/package.json').version")"
+          cargo_version="$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml', 'rb')).get('workspace', {}).get('package', {}).get('version', ''))")"
+          pyproject_version="$(python3 -c "import tomllib; print(tomllib.load(open('src/python/pyproject.toml', 'rb')).get('project', {}).get('version', ''))")"
+
+          if [ -z "$cargo_version" ]; then
+            echo "::error::Could not read [workspace.package] version from Cargo.toml."
+            exit 1
+          fi
+          if [ -z "$pyproject_version" ]; then
+            echo "::error::Could not read [project] version from src/python/pyproject.toml."
+            exit 1
+          fi
+
+          mismatched=0
+          if [ "$node_version" != "$version" ]; then
+            echo "::error::src/node/package.json version is $node_version but release $RELEASE_TAG requires $version."
+            mismatched=1
+          fi
+          if [ "$cargo_version" != "$version" ]; then
+            echo "::error::Cargo.toml [workspace.package] version is $cargo_version but release $RELEASE_TAG requires $version."
+            mismatched=1
+          fi
+          if [ "$pyproject_version" != "$version" ]; then
+            echo "::error::src/python/pyproject.toml [project] version is $pyproject_version but release $RELEASE_TAG requires $version."
+            mismatched=1
+          fi
+          if [ "$mismatched" -ne 0 ]; then
+            echo "Bump src/node/package.json, the Cargo.toml [workspace.package] version, and src/python/pyproject.toml [project] version to $version in a PR, merge it, then cut the Release from that commit."
+            exit 1
+          fi
+
+      - name: Install npm dependencies
+        working-directory: src/node
+        run: npm ci
+
+      - name: Generate platform package manifests
+        working-directory: src/node
+        run: npx napi create-npm-dirs
+
+      - name: Check generated platform package versions
+        working-directory: src/node
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          mismatched=0
+          for manifest in npm/*/package.json; do
+            package_version="$(node -p "require('./$manifest').version")"
+            if [ "$package_version" != "$version" ]; then
+              echo "::error::$manifest version is $package_version but release $RELEASE_TAG requires $version."
+              mismatched=1
+            fi
+          done
+          if [ "$mismatched" -ne 0 ]; then
+            echo "Bump src/node/package.json, the Cargo.toml [workspace.package] version, and src/python/pyproject.toml [project] version to $version in a PR, merge it, then cut the Release from that commit."
+            exit 1
+          fi
+
+  python-windows:
+    needs: version-guard
+    name: Python ${{ matrix.python-version }} ${{ matrix.target }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        target: [x64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "21.12"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish wheels
+        uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
+        with:
+          command: publish
+          target: ${{ matrix.target }}
+          args: -i ${{ matrix.python-version }} --no-sdist --skip-existing -m src/python/Cargo.toml
+
+  python-linux:
+    # aarch64 uses maturin-action's rust-cross manylinux cross image, which runs
+    # natively on the x64 runner and targets aarch64, so no QEMU is needed.
+    needs: version-guard
+    name: Python ${{ matrix.python-version }} ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        target: [x86_64, aarch64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - name: Build and publish wheels
+        uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
+        with:
+          command: publish
+          target: ${{ matrix.target }}
+          args: -i ${{ matrix.python-version }} --no-sdist --skip-existing -m src/python/Cargo.toml
+          before-script-linux: |
+            case "${{ matrix.target }}" in
+              "aarch64")
+                # NOTE: rust-cross manylinux cross images are Ubuntu based
+                apt-get update
+                apt-get install -y git wget unzip
+                ;;
+              "x86_64")
+                # NOTE: pypa manylinux images are CentOS based
+                yum install -y git wget unzip
+                ;;
+            esac
+            wget https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-linux-x86_64.zip
+            unzip protoc-21.12-linux-x86_64.zip -d "$HOME/protoc"
+            mv "$HOME/protoc/bin/protoc" /usr/local/bin/
+            cp -r "$HOME/protoc/include/"* /usr/local/include/
+            chmod 755 /usr/local/bin/protoc
+            protoc --version
+
+  python-macos:
+    needs: version-guard
+    name: Python ${{ matrix.python-version }} ${{ matrix.target }}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        target: [x86_64, aarch64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "21.12"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish wheels
+        uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
+        with:
+          command: publish
+          target: ${{ matrix.target }}
+          args: -i ${{ matrix.python-version }} --no-sdist --skip-existing -m src/python/Cargo.toml
+
+  build-node:
+    needs: version-guard
+    name: Node ${{ matrix.target }}
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 60
+    env:
+      DEBUG: "napi:*"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: demoparser.linux-x64-gnu.node
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: demoparser.linux-arm64-gnu.node
+          - host: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+            artifact: demoparser.linux-arm-gnueabihf.node
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: demoparser.linux-x64-musl.node
+          - host: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            artifact: demoparser.linux-arm64-musl.node
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: demoparser.win32-x64-msvc.node
+          - host: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact: demoparser.win32-arm64-msvc.node
+          - host: macos-latest
+            target: x86_64-apple-darwin
+            artifact: demoparser.darwin-x64.node
+          - host: macos-latest
+            target: aarch64-apple-darwin
+            artifact: demoparser.darwin-arm64.node
+          - host: macos-latest
+            target: universal-apple-darwin
+            artifact: demoparser.darwin-universal.node
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: src/node/package-lock.json
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.target == 'universal-apple-darwin' && 'x86_64-apple-darwin,aarch64-apple-darwin' || matrix.target }}
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "21.12"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Zig
+        if: contains(matrix.target, 'musl')
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.15.2
+
+      - name: Install cargo-zigbuild
+        if: contains(matrix.target, 'musl')
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-zigbuild
+
+      - name: Install dependencies
+        working-directory: src/node
+        run: npm ci
+
+      - name: Build
+        if: matrix.target != 'universal-apple-darwin'
+        working-directory: src/node
+        shell: bash
+        run: |
+          cross=""
+          case "${{ matrix.target }}" in
+            *-linux-gnu*) cross="--use-napi-cross" ;;
+            *-linux-musl) cross="--cross-compile" ;;
+          esac
+          npx napi build --platform --release --esm --target ${{ matrix.target }} $cross
+
+      - name: Build universal
+        if: matrix.target == 'universal-apple-darwin'
+        working-directory: src/node
+        run: |
+          npx napi build --platform --release --esm --target x86_64-apple-darwin
+          npx napi build --platform --release --esm --target aarch64-apple-darwin
+          npx napi universalize
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bindings-${{ matrix.target }}
+          path: src/node/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  publish-node:
+    name: Publish npm package
+    needs: [version-guard, build-node]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DEBUG: "napi:*"
+    # napi prepublish uploads the per-triple .node assets to the GitHub Release.
+    permissions:
+      contents: write
+      id-token: write
+    defaults:
+      run:
+        working-directory: src/node
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+          cache-dependency-path: src/node/package-lock.json
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "21.12"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: wasm-pack@0.13.1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download native artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: src/node/artifacts
+
+      - name: Build wasm, native binding and parity guards
+        run: npm run build
+
+      - name: Stage native artifacts into npm packages
+        run: npm run artifacts
+
+      - name: Publish to npm
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          prerelease=""
+          case "$version" in
+            *-*) prerelease="${version#*-}" ;;
+          esac
+          tag=""
+          case "$prerelease" in
+            alpha*) tag="alpha" ;;
+            beta*) tag="beta" ;;
+            rc*) tag="rc" ;;
+          esac
+          publish_args=(--provenance --access public)
+          if [ -n "$tag" ]; then
+            export NPM_CONFIG_TAG="$tag"
+            publish_args+=(--tag "$tag")
+            echo "Publishing $name@$version with prerelease dist-tag $tag"
+          else
+            echo "Publishing $name@$version with the default dist-tag"
+          fi
+          if npm view "$name@$version" version > /dev/null 2>&1; then
+            echo "$name@$version is already published; publishing any missing platform packages"
+            npm run prepublishOnly
+          else
+            npm publish "${publish_args[@]}"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # napi prepublish uploads .node assets to the Release
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true" # inherited by napi's per-triple npm publish
