@@ -76,14 +76,22 @@ fn fetch_protos(protos: &[&str]) -> Result<()> {
         None
     };
 
-    let clone_status = clone_repo(protos)?;
-    if protos_present(protos) {
-        return Ok(());
+    // The fetch runs at build time on CI hosts, where a transient network
+    // failure would otherwise fail the whole wheel build.
+    let mut clone_attempts = Vec::new();
+    for _ in 0..2 {
+        clone_attempts.push(match clone_repo(protos) {
+            Ok(status) => status.to_string(),
+            Err(err) => format!("error: {err}"),
+        });
+        if protos_present(protos) {
+            return Ok(());
+        }
     }
 
     let missing: Vec<&str> = protos.iter().copied().filter(|proto| !Path::new(proto).is_file()).collect();
     Err(std::io::Error::other(format!(
-        "csgoproto build: proto sync failed (pull: {pull_status:?}, clone: {clone_status}); missing: {missing:?}"
+        "csgoproto build: proto sync failed (pull: {pull_status:?}, clone: {clone_attempts:?}); missing: {missing:?}"
     )))
 }
 
