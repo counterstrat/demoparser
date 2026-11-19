@@ -255,12 +255,10 @@ dependencies = [
  "ahash",
  "counterstrat-demoparser",
  "csgoproto",
- "derive_more",
  "itertools 0.13.0",
  "memmap2 0.9.12",
  "polars",
  "polars-arrow",
- "protobuf-support",
  "pyo3",
 ]
 

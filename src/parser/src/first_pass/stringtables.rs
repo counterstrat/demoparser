@@ -105,7 +105,6 @@ impl<'a> FirstPassParser<'a> {
         variant_bit_count: bool,
     ) -> Result<(), DemoParserError> {
         let mut bitreader = Bitreader::new(&bytes);
-        let mut idx = -1;
         let mut keys: Vec<String> = vec![];
         // NOTE: entries are intentionally NOT retained (no `items` vec).
         // The registry (index/name/flags) is all update dispatch reads;
@@ -116,11 +115,10 @@ impl<'a> FirstPassParser<'a> {
             let mut key = "".to_owned();
             let mut value = vec![];
 
-            // Increment index
-            match bitreader.read_boolean()? {
-                true => idx += 1,
-                false => idx += (bitreader.read_varint()? + 1) as i32,
-            };
+            // Required side effect: advances the bitreader, do not remove.
+            if !bitreader.read_boolean()? {
+                bitreader.read_varint()?;
+            }
             // Does the value have a key
             if bitreader.read_boolean()? {
                 // Should we refer back to history (similar to LZ77)
@@ -264,7 +262,6 @@ impl<'a> SecondPassParser<'a> {
         variant_bit_count: bool,
     ) -> Result<(), DemoParserError> {
         let mut bitreader = Bitreader::new(&bytes);
-        let mut idx = -1;
         let mut keys: Vec<String> = vec![];
         // NOTE: entries are intentionally NOT retained (no `items` vec).
         // The registry (index/name/flags) is all update dispatch reads;
@@ -275,11 +272,10 @@ impl<'a> SecondPassParser<'a> {
             let mut key = "".to_owned();
             let mut value = vec![];
 
-            // Increment index
-            match bitreader.read_boolean()? {
-                true => idx += 1,
-                false => idx += (bitreader.read_varint()? + 1) as i32,
-            };
+            // Required side effect: advances the bitreader, do not remove.
+            if !bitreader.read_boolean()? {
+                bitreader.read_varint()?;
+            }
             // Does the value have a key
             if bitreader.read_boolean()? {
                 // Should we refer back to history (similar to LZ77)

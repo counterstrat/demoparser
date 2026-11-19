@@ -370,7 +370,7 @@ impl DemoParser {
     /// "map_name", "fullpackets_version", "allow_clientside_entities",
     /// "allow_clientside_particles", "demo_version_name", "demo_version_guid",
     /// "client_name", "game_directory"
-    pub fn parse_header(&self, py: Python<'_>) -> PyResult<HashMap<String, String, RandomState>> {
+    pub fn parse_header(&self, _py: Python<'_>) -> PyResult<HashMap<String, String, RandomState>> {
         let settings = ParserInputs {
             real_name_to_og_name: AHashMap::default(),
             wanted_players: vec![],
