@@ -16,6 +16,9 @@ concurrency:
   group: release-${{ github.event.release.tag_name }}
   cancel-in-progress: false
 
+env:
+  PROTOC_VERSION: "21.12"
+
 jobs:
   version-guard:
     name: Check release tag matches package versions
@@ -133,7 +136,7 @@ jobs:
       - name: Install Protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
-          version: "21.12"
+          version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and publish wheels
@@ -154,8 +157,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir protoc
-          wget -O protoc/protoc-21.12-linux-x86_64.zip \
-            "https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protoc-21.12-linux-x86_64.zip"
+          wget --tries=3 --retry-connrefused --timeout=60 \
+            -O "protoc/protoc-${PROTOC_VERSION}-linux-x86_64.zip" \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
 
       - name: Upload protoc archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -202,7 +206,7 @@ jobs:
           args: -i ${{ matrix.python-version }} --no-sdist --skip-existing -m src/python/Cargo.toml
           sccache: "true"
           before-script-linux: |
-            set -eu
+            set -euo pipefail
             # Each job runs in a fresh container and build.rs clones a git
             # repo, so git and unzip are installed per job; only protoc is
             # shared across jobs.
@@ -225,7 +229,7 @@ jobs:
             # container, so only the x86_64 archive ships. It arrives in
             # $GITHUB_WORKSPACE/.protoc, which maturin-action mounts into the
             # container at the same path.
-            unzip "$GITHUB_WORKSPACE/.protoc/protoc-21.12-linux-x86_64.zip" -d "$HOME/protoc"
+            unzip "$GITHUB_WORKSPACE/.protoc/protoc-${{ env.PROTOC_VERSION }}-linux-x86_64.zip" -d "$HOME/protoc"
             mv "$HOME/protoc/bin/protoc" /usr/local/bin/
             cp -r "$HOME/protoc/include/"* /usr/local/include/
             chmod 755 /usr/local/bin/protoc
@@ -256,7 +260,7 @@ jobs:
       - name: Install Protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
-          version: "21.12"
+          version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and publish wheels
@@ -334,7 +338,7 @@ jobs:
       - name: Install Protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
-          version: "21.12"
+          version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Zig
@@ -419,7 +423,7 @@ jobs:
       - name: Install Protoc
         uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
-          version: "21.12"
+          version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install wasm-pack
