@@ -21,24 +21,32 @@ fn main() -> Result<()> {
     let csgoproto_dir = manifest_dir.join("../csgoproto");
     let codegen_target_dir = manifest_dir.join("../../target/codegen");
     let profile = std::env::var("PROFILE").unwrap_or("debug".to_string());
+    let codegen_context = "csgoproto codegen (cargo run in csgoproto)";
 
     let mut command = Command::new("cargo");
     command
         .current_dir(csgoproto_dir)
         .env("COUNTERSTRAT_CODEGEN", "1")
+        // Cross build images (rust-cross for aarch64) export CARGO_BUILD_TARGET;
+        // inheriting it would build the codegen binary for the target and then
+        // fail to run it on the build host.
+        .env_remove("CARGO_BUILD_TARGET")
         .arg("run")
-        .arg("--quiet")
         .arg("--locked")
         .arg("--target-dir")
         .arg(codegen_target_dir);
     if profile == "release" {
         command.arg("--release");
     }
-    let status = command.status()?;
-    if !status.success() {
-        return Err(std::io::Error::other(format!(
-            "csgoproto codegen failed with {status}"
-        )));
+    let output = command
+        .output()
+        .map_err(|err| std::io::Error::other(format!("{codegen_context} failed to start: {err}")))?;
+    if !output.status.success() {
+        let status = output.status;
+        eprintln!("{codegen_context} failed with {status}");
+        eprintln!("{codegen_context} stdout:\n{}", String::from_utf8_lossy(&output.stdout));
+        eprintln!("{codegen_context} stderr:\n{}", String::from_utf8_lossy(&output.stderr));
+        return Err(std::io::Error::other(format!("{codegen_context} failed with {status}")));
     }
 
     Ok(())
