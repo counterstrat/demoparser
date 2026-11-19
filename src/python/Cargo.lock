@@ -303,14 +303,12 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "csgoproto",
- "derive_more",
  "ethnum",
  "itertools 0.13.0",
  "memmap2 0.9.9",
  "counterstrat-demoparser",
  "polars",
  "polars-arrow",
- "protobuf-support",
  "pyo3",
 ]
 
@@ -1375,15 +1373,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c2c1bf36ddb1a1c396b3601a3cec27c2462e45f07c386894ec3ccf5332bd16"
 dependencies = [
  "prost",
-]
-
-[[package]]
-name = "protobuf-support"
-version = "3.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e36c2f31e0a47f9280fb347ef5e461ffcd2c52dd520d8e216b52f93b0b0d7d6"
-dependencies = [
- "thiserror",
 ]
 
 [[package]]
