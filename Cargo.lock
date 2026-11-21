@@ -366,6 +366,7 @@ dependencies = [
 name = "csgoproto"
 version = "0.1.0"
 dependencies = [
+ "git-mirror",
  "phf",
  "prost",
  "prost-build",
@@ -608,6 +609,10 @@ dependencies = [
  "libc",
  "r-efi 6.0.0",
 ]
+
+[[package]]
+name = "git-mirror"
+version = "0.1.0"
 
 [[package]]
 name = "glob"

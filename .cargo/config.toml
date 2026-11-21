@@ -1,0 +1,21 @@
+# Run these commands from the repository root. Cargo walks up from the current
+# directory to find this config, but the aliases' relative --manifest-path
+# values only resolve from the repo root.
+#
+# `cargo sync-check` is read-only: it fetches upstream into FETCH_HEAD and
+# reports whether the checkout matches: SYNCED -> exit 0, BEHIND -> exit 1,
+# offline, missing checkout, or failed rev-parse/log -> exit 2. It never resets
+# the mirror or touches build artifacts.
+#
+# `cargo sync-now` mutates: it force-syncs the mirror to upstream HEAD (fetch +
+# hard reset, safe against upstream force pushes), then invalidates codegen with
+# `cargo clean -p csgoproto -p counterstrat-demoparser` so the next
+# `cargo build -p counterstrat-demoparser` regenerates generated_*.rs. It skips
+# that clean when the mirror did not move and all three generated outputs still
+# exist, so a no-op stays fast while a hand-deleted output is rebuilt. Prints
+# SYNCED/NOW-SYNCED with the commits, exits 0 on success, and exits 2 on any
+# failure (offline, missing checkout, rev-parse/log, or cargo clean); it never
+# exits 1.
+[alias]
+sync-check = "run --quiet --manifest-path .cargo/sync-check/Cargo.toml"
+sync-now = "run --quiet --manifest-path .cargo/sync-now/Cargo.toml"

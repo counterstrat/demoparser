@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "src/csgoproto",
+  "src/git-mirror",
   "src/node",
   "src/parser",
   "src/python",
@@ -10,6 +11,7 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
+rust-version = "1.88"
 
 [profile.dev]
 overflow-checks = false

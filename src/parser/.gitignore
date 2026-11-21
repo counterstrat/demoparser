@@ -1,12 +1,2 @@
-/Protobufs
 /target
-.vscode/
-venv
-.venv
-*.py
-flamegraph.svg
-perf.data
-perf.data.old
-junk.txt
-voxels.txt
-main.rs
+/src/generated_*.rs

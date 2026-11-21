@@ -1,0 +1,4 @@
+# Dev-only tool with one local path dependency and no registry crates, so the
+# lock pins nothing worth committing. Track it if third-party deps are added.
+Cargo.lock
+target/

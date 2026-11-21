@@ -1,0 +1,9 @@
+[package]
+name = "git-mirror"
+version = "0.1.0"
+rust-version.workspace = true
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["lib"]

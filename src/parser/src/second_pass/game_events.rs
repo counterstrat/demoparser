@@ -25,7 +25,7 @@ use crate::second_pass::variants::*;
 use csgoproto::CMsgPlayerBulletHit;
 use csgoproto::CMsgTeFireBullets;
 use csgoproto::csvc_msg_game_event::KeyT;
-use csgoproto::maps::WEAPINDICIES;
+use crate::maps::WEAPINDICIES;
 use csgoproto::CUserMessageSayText;
 use csgoproto::CUserMessageSayText2;
 use csgoproto::CcsUsrMsgServerRankUpdate;

@@ -1,11 +1,13 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{io::Result, process::Command};
 
 fn main() -> Result<()> {
     println!("cargo::rerun-if-changed=../csgoproto/src/main.rs");
-    println!("cargo::rerun-if-changed=../csgoproto/src/parser.rs");
+    println!("cargo::rerun-if-changed=../csgoproto/src/codegen_parser.rs");
     println!("cargo::rerun-if-changed=../csgoproto/src/lib.rs");
     println!("cargo::rerun-if-changed=../csgoproto/Cargo.toml");
+    println!("cargo::rerun-if-changed=../csgoproto/build.rs");
+    println!("cargo::rerun-if-changed=../csgoproto/build_support/delta_patch.rs");
     println!("cargo::rerun-if-changed=../csgoproto/GameTracking-CS2/Protobufs");
     println!("cargo::rerun-if-changed=../csgoproto/GameTracking-CS2/game/csgo/pak01_dir/scripts/items/items_game.txt");
     println!("cargo::rerun-if-changed=../csgoproto/GameTracking-CS2/game/csgo/pak01_dir/resource/csgo_english.txt");
@@ -18,26 +20,35 @@ fn main() -> Result<()> {
     }
 
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let csgoproto_dir = manifest_dir.join("../csgoproto");
-    let codegen_target_dir = manifest_dir.join("../../target/codegen");
-    let profile = std::env::var("PROFILE").unwrap_or("debug".to_string());
+    let workspace_root = manifest_dir.parent().and_then(Path::parent).unwrap_or(&manifest_dir);
+    let csgoproto_dir = manifest_dir.parent().unwrap_or(&manifest_dir).join("csgoproto");
+    let codegen_target_dir = codegen_target_dir(workspace_root);
+    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
     let codegen_context = "csgoproto codegen (cargo run in csgoproto)";
 
     let mut command = Command::new("cargo");
     command
         .current_dir(csgoproto_dir)
         .env("COUNTERSTRAT_CODEGEN", "1")
-        // Cross build images (rust-cross for aarch64) export CARGO_BUILD_TARGET;
-        // inheriting it would build the codegen binary for the target and then
-        // fail to run it on the build host.
+        // The codegen binary runs on the build host. Drop target and rustflag
+        // overrides that describe the cross target; `--target-dir` below pins
+        // the only other setting that matters.
         .env_remove("CARGO_BUILD_TARGET")
+        .env_remove("CARGO_BUILD_RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("RUSTFLAGS")
         .arg("run")
         .arg("--locked")
         .arg("--target-dir")
         .arg(codegen_target_dir);
-    if profile == "release" {
-        command.arg("--release");
+    match profile.as_str() {
+        "release" => {
+            command.arg("--release");
+        }
+        "debug" => {}
+        other => println!("cargo::warning=csgoproto codegen: profile `{other}` has no direct cargo flag; building codegen in debug"),
     }
+    command.arg("--").arg(manifest_dir.join("src"));
     let output = command
         .output()
         .map_err(|err| std::io::Error::other(format!("{codegen_context} failed to start: {err}")))?;
@@ -50,4 +61,17 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn codegen_target_dir(workspace_root: &Path) -> PathBuf {
+    let target_root = match std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .filter(|dir| !dir.to_string_lossy().trim().is_empty())
+    {
+        Some(dir) if dir.is_absolute() => dir,
+        Some(dir) => workspace_root.join(dir),
+        None => workspace_root.join("target"),
+    };
+
+    target_root.join("codegen")
 }

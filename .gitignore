@@ -1,3 +1,5 @@
+# Generated Rust sources are ignored by the crate that writes them:
+# src/csgoproto/.gitignore and src/parser/.gitignore.
 target/
 .vscode/
 *.node

@@ -1,5 +1,4 @@
-pub mod maps;
-pub mod message_type;
+mod generated_protobuf;
 
-mod protobuf;
-pub use protobuf::*;
+/// Generated prost messages, re-exported flat so `csgoproto::*` keeps working.
+pub use generated_protobuf::*;

@@ -1,0 +1,10 @@
+[package]
+name = "sync-now"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+git-mirror = { path = "../../src/git-mirror" }
+
+[workspace]
