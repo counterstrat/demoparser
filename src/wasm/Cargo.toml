@@ -1,6 +1,7 @@
 [package]
 name = "counterstrat-demoparser-wasm"
 version.workspace = true
+rust-version.workspace = true
 authors = ["LaihoE"]
 edition = "2018"
 

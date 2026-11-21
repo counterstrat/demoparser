@@ -6,6 +6,8 @@ fn main() -> Result<()> {
     println!("cargo::rerun-if-changed=../csgoproto/src/codegen_parser.rs");
     println!("cargo::rerun-if-changed=../csgoproto/src/lib.rs");
     println!("cargo::rerun-if-changed=../csgoproto/Cargo.toml");
+    println!("cargo::rerun-if-changed=../csgoproto/build.rs");
+    println!("cargo::rerun-if-changed=../csgoproto/build_support/delta_patch.rs");
     println!("cargo::rerun-if-changed=../csgoproto/GameTracking-CS2/Protobufs");
     println!("cargo::rerun-if-changed=../csgoproto/GameTracking-CS2/game/csgo/pak01_dir/scripts/items/items_game.txt");
     println!("cargo::rerun-if-changed=../csgoproto/GameTracking-CS2/game/csgo/pak01_dir/resource/csgo_english.txt");
@@ -62,15 +64,12 @@ fn main() -> Result<()> {
 }
 
 fn codegen_target_dir(workspace_root: &Path) -> PathBuf {
-    let target_root = match std::env::var_os("CARGO_TARGET_DIR") {
-        Some(dir) => {
-            let dir = PathBuf::from(dir);
-            if dir.is_absolute() {
-                dir
-            } else {
-                workspace_root.join(dir)
-            }
-        }
+    let target_root = match std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .filter(|dir| !dir.as_os_str().is_empty())
+    {
+        Some(dir) if dir.is_absolute() => dir,
+        Some(dir) => workspace_root.join(dir),
         None => workspace_root.join("target"),
     };
 

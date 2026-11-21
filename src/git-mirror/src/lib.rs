@@ -37,9 +37,12 @@ pub fn mirror_path() -> Result<PathBuf> {
     }
 }
 
-/// Fetches the current upstream tip into `FETCH_HEAD`.
+/// Fetches the upstream `HEAD` commit into `FETCH_HEAD`.
+///
+/// The explicit ref keeps `FETCH_HEAD` to a single entry; fetching the default
+/// refspec can record several refs and leave the tip ambiguous.
 pub fn fetch(mirror: &Path) -> Result<()> {
-    let output = run_git(mirror, &["fetch", "--depth=1", "origin"])?;
+    let output = run_git(mirror, &["fetch", "--depth=1", "origin", "HEAD"])?;
     if output.status.success() {
         return Ok(());
     }
@@ -51,7 +54,10 @@ pub fn fetch(mirror: &Path) -> Result<()> {
     ))
 }
 
-/// Reports whether `HEAD` already points at the commit in `FETCH_HEAD`.
+/// Reports whether `HEAD` already points at the first commit in `FETCH_HEAD`.
+///
+/// `rev-parse FETCH_HEAD` can print one line per fetched ref, so only the
+/// first entry is compared.
 pub fn head_matches(mirror: &Path) -> Result<bool> {
     let output = run_git(mirror, &["rev-parse", "HEAD", "FETCH_HEAD"])?;
     if !output.status.success() {
@@ -59,7 +65,10 @@ pub fn head_matches(mirror: &Path) -> Result<bool> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut lines = stdout.lines().map(str::trim);
+    let mut lines = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
     let head = lines.next().unwrap_or_default();
     let fetched = lines.next().unwrap_or_default();
     if head.is_empty() || fetched.is_empty() {

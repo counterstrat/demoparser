@@ -59,7 +59,8 @@ fn generate_protobuf(mirror: &Path, protos: &[PathBuf]) -> Result<()> {
 
     let generated = fs::read_to_string(generated_dir.join("protobuf.rs"))?;
     let generated = delta_patch::patch(&with_header(generated));
-    write_if_changed(&Path::new("src").join(PROTOBUF_FILE), generated.as_bytes())
+    let source_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    write_if_changed(&source_dir.join(PROTOBUF_FILE), generated.as_bytes())
 }
 
 fn with_header(generated: String) -> String {

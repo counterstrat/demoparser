@@ -1,6 +1,7 @@
 [package]
 name = "csgoproto"
 version.workspace = true
+rust-version.workspace = true
 authors = ["Laiho"]
 edition = "2021"
 

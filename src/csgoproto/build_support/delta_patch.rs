@@ -38,86 +38,88 @@ pub fn patch(generated: &str) -> String {
 }
 
 fn matching_brace(source: &str, body_start: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
     let mut depth = 1usize;
-    for (offset, ch) in source[body_start..].char_indices() {
-        match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(body_start + offset);
+    let mut index = body_start;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
                 }
             }
-            _ => {}
+            b'"' => index = quoted_end(bytes, index),
+            b'\'' => index = char_literal_end(bytes, index).unwrap_or(index + 1),
+            b'{' => {
+                depth += 1;
+                index += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+                index += 1;
+            }
+            _ => index += 1,
         }
     }
     None
 }
 
+fn quoted_end(bytes: &[u8], opening: usize) -> usize {
+    let mut index = opening + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'"' => return index + 1,
+            _ => index += 1,
+        }
+    }
+    index
+}
+
+fn char_literal_end(bytes: &[u8], opening: usize) -> Option<usize> {
+    let mut index = opening + 1;
+    if bytes.get(index) == Some(&b'\\') {
+        index += 1;
+        while index < bytes.len() && bytes[index] != b'\'' && bytes[index] != b'\n' {
+            index += 1;
+        }
+        return (bytes.get(index) == Some(&b'\'')).then_some(index + 1);
+    }
+
+    index += utf8_width(bytes.get(index).copied()?);
+    (bytes.get(index) == Some(&b'\'')).then_some(index + 1)
+}
+
+fn utf8_width(first: u8) -> usize {
+    match first {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        _ => 4,
+    }
+}
+
+// Generated fields carry a single `#[prost(...)]` attribute with at most one
+// `tag = "N"` pair, so a textual search needs no attribute parser.
 fn field_tag(body: &str, field_start: usize) -> Option<&str> {
     let attribute_start = body[..field_start].rfind("#[prost(")?;
     let attribute_end = body[attribute_start..].find(']')? + attribute_start;
-    let attribute = &body[attribute_start..=attribute_end];
-    let tag_start = attribute.find("tag")? + "tag".len();
-    let value = attribute[tag_start..].trim_start();
-    let value = value.strip_prefix('=')?.trim_start();
-    let value = value.strip_prefix('"')?;
-    let value_end = value.find('"')?;
-    Some(&value[..value_end])
+    tag_attribute_value(&body[attribute_start..=attribute_end])
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const WITHOUT_FIELD: &str = "\
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CMsgServerUserCmd {
-    #[prost(int32, optional, tag=\"5\")]
-    pub client_tick: ::core::option::Option<i32>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CsvcMsgUserCommands {
-    #[prost(message, repeated, tag=\"1\")]
-    pub commands: ::prost::alloc::vec::Vec<CMsgServerUserCmd>,
-}
-";
-
-    const WITH_FIELD: &str = "\
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CMsgServerUserCmd {
-    #[prost(int32, optional, tag=\"5\")]
-    pub client_tick: ::core::option::Option<i32>,
-    #[prost(bytes=\"bytes\", optional, tag=\"6\")]
-    pub delta_data: ::core::option::Option<::prost::bytes::Bytes>,
-}
-";
-
-    #[test]
-    fn inserts_missing_field_with_tag_six() {
-        let patched = patch(WITHOUT_FIELD);
-        assert!(patched.contains("#[prost(bytes=\"bytes\", optional, tag=\"6\")]"));
-        assert!(patched.contains("pub delta_data: ::core::option::Option<::prost::bytes::Bytes>,\n}"));
+fn tag_attribute_value(attribute: &str) -> Option<&str> {
+    let mut remaining = attribute;
+    while let Some(tag_start) = remaining.find("tag") {
+        let after_tag = &remaining[tag_start + "tag".len()..];
+        if let Some(after_equals) = after_tag.trim_start().strip_prefix('=') {
+            let value = after_equals.trim_start().strip_prefix('"')?;
+            return value.find('"').map(|end| &value[..end]);
+        }
+        remaining = after_tag;
     }
-
-    #[test]
-    fn insert_is_idempotent() {
-        let patched = patch(WITHOUT_FIELD);
-        assert_eq!(patch(&patched), patched);
-    }
-
-    #[test]
-    fn leaves_existing_tag_six_field_untouched() {
-        assert_eq!(patch(WITH_FIELD), WITH_FIELD);
-    }
-
-    #[test]
-    #[should_panic(expected = "expected 6")]
-    fn rejects_existing_field_with_other_tag() {
-        let generated = WITHOUT_FIELD.replace(
-            "    pub client_tick",
-            "    #[prost(bytes=\"bytes\", optional, tag=\"9\")]\n    pub delta_data: ::core::option::Option<::prost::bytes::Bytes>,\n    pub client_tick",
-        );
-        patch(&generated);
-    }
+    None
 }

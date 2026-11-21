@@ -5,6 +5,11 @@
 //! `SYNCED` and exits 0 when the mirror matches upstream, prints `BEHIND` and
 //! exits 1 when it is stale, and exits 2 when offline or the checkout is
 //! missing.
+//!
+//! This dev-only helper depends on a single local path crate and no registry
+//! crates, so its `Cargo.lock` is not tracked: it pins nothing that the
+//! workspace lock does not already pin. Track it if third-party dependencies
+//! are ever added.
 
 use std::{path::Path, process::ExitCode};
 
