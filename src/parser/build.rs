@@ -38,6 +38,7 @@ fn main() -> Result<()> {
     if profile == "release" {
         command.arg("--release");
     }
+    command.arg("--").arg(manifest_dir.join("src"));
     let output = command
         .output()
         .map_err(|err| std::io::Error::other(format!("{codegen_context} failed to start: {err}")))?;

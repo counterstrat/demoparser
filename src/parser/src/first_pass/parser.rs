@@ -14,7 +14,7 @@ use crate::second_pass::other_netmessages::Class;
 use ahash::AHashMap;
 use ahash::AHashSet;
 use csgoproto::csvc_msg_game_event_list::DescriptorT;
-use csgoproto::message_type::NetMessageType::{self, *};
+use crate::message_type::NetMessageType::{self, *};
 use csgoproto::CDemoClassInfo;
 use csgoproto::CDemoFileHeader;
 use csgoproto::CDemoFullPacket;

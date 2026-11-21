@@ -10,3 +10,4 @@ perf.data.old
 junk.txt
 voxels.txt
 main.rs
+/src/generated_*.rs

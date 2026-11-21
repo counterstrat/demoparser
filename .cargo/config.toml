@@ -1,0 +1,5 @@
+# `cargo sync-check` (run from the repo root) fetches the GameTracking-CS2
+# mirror in src/csgoproto/GameTracking-CS2 and reports whether it matches
+# upstream: exit 0 = SYNCED, 1 = BEHIND, 2 = offline or missing checkout.
+[alias]
+sync-check = "run --quiet --manifest-path .cargo/sync-check/Cargo.toml"

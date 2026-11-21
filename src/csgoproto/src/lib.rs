@@ -1,5 +1,2 @@
-pub mod maps;
-pub mod message_type;
-
-mod protobuf;
-pub use protobuf::*;
+mod generated_protobuf;
+pub use generated_protobuf::*;

@@ -18,7 +18,7 @@ use crate::second_pass::variants::PropColumn;
 use crate::second_pass::variants::Variant;
 use ahash::AHashMap;
 use ahash::AHashSet;
-use csgoproto::message_type::NetMessageType::{self, *};
+use crate::message_type::NetMessageType::{self, *};
 use csgoproto::CDemoFullPacket;
 use csgoproto::CDemoPacket;
 use csgoproto::CnetMsgTick;
