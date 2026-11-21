@@ -2,6 +2,7 @@ import unittest
 from unittest import TestCase
 from typing import Union
 
+import numpy as np
 import pandas as pd
 from counterstrat_demoparser import DemoParser, WantedPropState
 
@@ -196,6 +197,36 @@ class SignatureTest(TestCase):
             parser.parse_ticks(
                 ["X", "Y"], prop_states=[{"prop": "is_alive", "state": True}]
             )
+
+    def test_pandas3_dtypes_and_null_sentinels(self):
+        parser = DemoParser(demo_path)
+
+        # Plain to_pandas path (parse_ticks): strings use pandas' str dtype, and
+        # missing values are np.nan in both str and float columns.
+        ticks = parser.parse_ticks(["active_weapon_name", "health"])
+        self.assertEqual(str(ticks["active_weapon_name"].dtype), "str")
+        self.assertTrue(ticks["active_weapon_name"].isna().any())
+        str_missing = ticks["active_weapon_name"][ticks["active_weapon_name"].isna()].iloc[0]
+        self.assertIsInstance(str_missing, float)
+        self.assertTrue(np.isnan(str_missing))
+
+        self.assertEqual(str(ticks["health"].dtype), "float64")
+        self.assertTrue(ticks["health"].isna().any())
+        self.assertTrue(np.isnan(ticks["health"][ticks["health"].isna()].iloc[0]))
+
+        # use_pyarrow_extension_array path (parse_player_info / parse_skins):
+        # columns keep their Arrow dtype and missing values are pd.NA.
+        player_info = parser.parse_player_info()
+        self.assertEqual(str(player_info["name"].dtype), "large_string[pyarrow]")
+        self.assertEqual(str(player_info["steamid"].dtype), "uint64[pyarrow]")
+
+        skins = parser.parse_skins()
+        self.assertEqual(str(skins["custom_name"].dtype), "large_string[pyarrow]")
+        self.assertTrue(skins["custom_name"].isna().any())
+        self.assertIs(
+            skins["custom_name"][skins["custom_name"].isna()].iloc[0],
+            pd.NA,
+        )
 
     def test_list_updated_fields(self):
         parser = DemoParser(demo_path)

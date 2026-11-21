@@ -586,8 +586,7 @@ pub fn parse_ticks(
     .map(|prop| (prop.prop, prop.state.0))
     .collect();
   let wanted_prop_state_names: Vec<String> = wanted_prop_states.keys().cloned().collect();
-  // Node strips the `Weapon.` and `Grenade.` prefixes before the friendly-name
-  // lookup, unlike the Python binding. Python is frozen, so keep this behavior.
+  // `rm_user_friendly_names` also strips the `Weapon.` and `Grenade.` prefixes.
   let real_wanted_prop_state_names = match rm_user_friendly_names(&wanted_prop_state_names) {
     Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),

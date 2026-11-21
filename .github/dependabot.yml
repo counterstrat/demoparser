@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # pip only: requirements-ci.txt is the Dependabot-owned source for Python test
+  # pins. Cargo and npm dependencies are updated directly, not by Dependabot.
+  - package-ecosystem: "pip"
+    directory: "/src/python"
+    schedule:
+      interval: "monthly"

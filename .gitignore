@@ -10,8 +10,8 @@ src/node/wasm/
 src/node/index.js
 src/node/index.d.ts
 src/node/index.cjs
-venv
-.venv
+venv*
+.venv*
 flamegraph.svg
 perf.data
 perf.data.old

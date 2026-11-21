@@ -1,1 +1,4 @@
+# The compiled extension module is re-exported by the package __init__ and has
+# no stub of its own; the typed surface is counterstrat_demoparser.pyi, so
+# stubtest cannot see a stub for the extension module itself.
 counterstrat_demoparser.counterstrat_demoparser
