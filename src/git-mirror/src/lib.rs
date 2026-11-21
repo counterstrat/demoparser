@@ -1,4 +1,5 @@
-//! Git operations shared by the build-time proto sync and `cargo sync-check`.
+//! Git operations shared by the build-time proto sync, `cargo sync-check`, and
+//! `cargo sync-now`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -14,9 +15,9 @@ pub const MIRROR_REL: &str = "src/csgoproto/GameTracking-CS2";
 /// Resolves [`MIRROR_REL`] against the workspace root.
 ///
 /// Build scripts run with `CARGO_MANIFEST_DIR` set to their package directory,
-/// while `sync-check` is run from the repository root. Walking up from either
-/// starting point finds the workspace root, independent of the process working
-/// directory.
+/// while `sync-check` and `sync-now` are run from the repository root. Walking
+/// up from either starting point finds the workspace root, independent of the
+/// process working directory.
 pub fn mirror_path() -> Result<PathBuf> {
     let start = std::env::var_os("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
@@ -99,8 +100,8 @@ pub fn sync(mirror: &Path) -> Result<()> {
 
 /// Runs git in `mirror` with terminal prompts disabled, returning its output.
 ///
-/// Public so `sync-check` can run read-only inspection commands (`rev-parse`,
-/// `log`) without duplicating process setup.
+/// Public so `sync-check` and `sync-now` can run read-only inspection commands
+/// (`rev-parse`, `log`) without duplicating process setup.
 pub fn run_git(mirror: &Path, args: &[&str]) -> Result<Output> {
     Command::new("git")
         .arg("-C")
