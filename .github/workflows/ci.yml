@@ -32,7 +32,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        uses: step-security/setup-protoc@d23a2fbf8225f60169d10a2b16a023b0381508bb # v3.0.1
         with:
           version: "21.12"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -79,7 +79,7 @@ jobs:
           cache-dependency-path: src/python/requirements-ci.txt
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        uses: step-security/setup-protoc@d23a2fbf8225f60169d10a2b16a023b0381508bb # v3.0.1
         with:
           version: "21.12"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -118,7 +118,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        uses: step-security/setup-protoc@d23a2fbf8225f60169d10a2b16a023b0381508bb # v3.0.1
         with:
           version: "21.12"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
