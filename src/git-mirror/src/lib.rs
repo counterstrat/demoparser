@@ -1,10 +1,41 @@
 //! Git operations shared by the build-time proto sync and `cargo sync-check`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// Plain string errors keep build-script and CLI messages readable; a newtype
+/// would add no information.
 pub type Error = String;
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Workspace-relative location of the GameTracking-CS2 mirror.
+pub const MIRROR_REL: &str = "src/csgoproto/GameTracking-CS2";
+
+/// Resolves [`MIRROR_REL`] against the workspace root.
+///
+/// Build scripts run with `CARGO_MANIFEST_DIR` set to their package directory,
+/// while `sync-check` is run from the repository root. Walking up from either
+/// starting point finds the workspace root, independent of the process working
+/// directory.
+pub fn mirror_path() -> Result<PathBuf> {
+    let start = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| "could not determine a starting directory".to_string())?;
+    let mut dir = start.clone();
+
+    loop {
+        if dir.join("src/csgoproto/Cargo.toml").is_file() {
+            return Ok(dir.join(MIRROR_REL));
+        }
+        if !dir.pop() {
+            return Err(format!(
+                "could not find the workspace root above {} (missing src/csgoproto/Cargo.toml)",
+                start.display()
+            ));
+        }
+    }
+}
 
 /// Fetches the current upstream tip into `FETCH_HEAD`.
 pub fn fetch(mirror: &Path) -> Result<()> {
@@ -28,8 +59,13 @@ pub fn head_matches(mirror: &Path) -> Result<bool> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut commits = stdout.lines();
-    Ok(commits.next() == commits.next())
+    let mut lines = stdout.lines().map(str::trim);
+    let head = lines.next().unwrap_or_default();
+    let fetched = lines.next().unwrap_or_default();
+    if head.is_empty() || fetched.is_empty() {
+        return Err("git rev-parse HEAD FETCH_HEAD returned fewer than two commits".to_string());
+    }
+    Ok(head == fetched)
 }
 
 /// Fetches the upstream tip and hard-resets the mirror when it has moved.
@@ -53,6 +89,9 @@ pub fn sync(mirror: &Path) -> Result<()> {
 }
 
 /// Runs git in `mirror` with terminal prompts disabled, returning its output.
+///
+/// Public so `sync-check` can run read-only inspection commands (`rev-parse`,
+/// `log`) without duplicating process setup.
 pub fn run_git(mirror: &Path, args: &[&str]) -> Result<Output> {
     Command::new("git")
         .arg("-C")

@@ -7,6 +7,8 @@ use csgoproto::EDemoCommands;
 use phf_macros::phf_map;
 use phf_macros::phf_set;
 
+/// Generated paint-kit, agent, sticker, and weapon maps; a flat re-export keeps
+/// `crate::maps::*` stable when upstream adds a map.
 pub use crate::generated_maps::*;
 
 pub static FACTORIES_MAP: phf::Set<&'static str> = phf_set! {

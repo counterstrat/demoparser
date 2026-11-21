@@ -1,6 +1,12 @@
-use std::{path::Path, process::ExitCode};
+//! Reports whether the local GameTracking-CS2 mirror matches upstream.
+//!
+//! Run `cargo sync-check` from the repository root: cargo only discovers the
+//! alias in `.cargo/config.toml` from the current directory. The command prints
+//! `SYNCED` and exits 0 when the mirror matches upstream, prints `BEHIND` and
+//! exits 1 when it is stale, and exits 2 when offline or the checkout is
+//! missing.
 
-const MIRROR: &str = "src/csgoproto/GameTracking-CS2";
+use std::{path::Path, process::ExitCode};
 
 fn main() -> ExitCode {
     match check() {
@@ -13,19 +19,20 @@ fn main() -> ExitCode {
 }
 
 fn check() -> Result<ExitCode, String> {
-    let mirror = Path::new(MIRROR);
+    let mirror = git_mirror::mirror_path()?;
+    let display = mirror.display();
 
     if !mirror.join(".git").exists() {
         return Err(format!(
-            "no GameTracking-CS2 checkout at {MIRROR}; run cargo build -p counterstrat-demoparser from the repo root to create it"
+            "no GameTracking-CS2 checkout at {display}; run `cargo build -p counterstrat-demoparser` from the repo root to create it"
         ));
     }
 
-    git_mirror::fetch(mirror)?;
+    git_mirror::fetch(&mirror)?;
 
-    let head = rev_parse(mirror, "HEAD")?;
-    let fetched = rev_parse(mirror, "FETCH_HEAD")?;
-    let summary = fetch_head_summary(mirror)?;
+    let head = rev_parse(&mirror, "HEAD")?;
+    let fetched = rev_parse(&mirror, "FETCH_HEAD")?;
+    let summary = fetch_head_summary(&mirror)?;
 
     println!("HEAD:       {head}");
     println!("FETCH_HEAD: {fetched}");
