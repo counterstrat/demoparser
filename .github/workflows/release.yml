@@ -141,7 +141,7 @@ jobs:
         with:
           command: build
           target: ${{ matrix.target }}
-          args: -i ${{ matrix.python-version }} -m src/python/Cargo.toml --out dist
+          args: -i ${{ matrix.python-version }} -m src/python/Cargo.toml --out dist --release
           sccache: "true"
 
       - name: Upload wheels
@@ -205,7 +205,7 @@ jobs:
           command: build
           target: ${{ matrix.target }}
           manylinux: auto
-          args: -i ${{ matrix.python-version }} -m src/python/Cargo.toml --out dist
+          args: -i ${{ matrix.python-version }} -m src/python/Cargo.toml --out dist --release
           sccache: "true"
           before-script-linux: |
             set -euo pipefail
@@ -274,7 +274,7 @@ jobs:
         with:
           command: build
           target: ${{ matrix.target }}
-          args: -i ${{ matrix.python-version }} -m src/python/Cargo.toml --out dist
+          args: -i ${{ matrix.python-version }} -m src/python/Cargo.toml --out dist --release
           sccache: "true"
 
       - name: Upload wheels
