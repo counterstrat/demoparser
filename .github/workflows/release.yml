@@ -116,9 +116,6 @@ jobs:
     name: Python windows ${{ matrix.python-version }} ${{ matrix.target }}
     runs-on: windows-latest
     timeout-minutes: 30
-    permissions:
-      contents: read
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -134,18 +131,25 @@ jobs:
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        uses: step-security/setup-protoc@d23a2fbf8225f60169d10a2b16a023b0381508bb # v3.0.1
         with:
           version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and publish wheels
+      - name: Build wheels
         uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
         with:
-          command: publish
+          command: build
           target: ${{ matrix.target }}
-          args: -i ${{ matrix.python-version }} --no-sdist --skip-existing -m src/python/Cargo.toml
+          args: -i ${{ matrix.python-version }} -m src/python/Cargo.toml --out dist --release
           sccache: "true"
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-windows-${{ matrix.target }}-${{ matrix.python-version }}
+          path: dist
+          if-no-files-found: error
 
   protoc-linux:
     needs: version-guard
@@ -175,9 +179,6 @@ jobs:
     name: Python linux ${{ matrix.python-version }} ${{ matrix.target }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.target == 'aarch64' && 60 || 30 }}
-    permissions:
-      contents: read
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -198,12 +199,13 @@ jobs:
           name: protoc-linux
           path: .protoc
 
-      - name: Build and publish wheels
+      - name: Build wheels
         uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
         with:
-          command: publish
+          command: build
           target: ${{ matrix.target }}
-          args: -i ${{ matrix.python-version }} --no-sdist --skip-existing -m src/python/Cargo.toml
+          manylinux: auto
+          args: -i ${{ matrix.python-version }} -m src/python/Cargo.toml --out dist --release
           sccache: "true"
           before-script-linux: |
             set -euo pipefail
@@ -235,14 +237,18 @@ jobs:
             chmod 755 /usr/local/bin/protoc
             protoc --version
 
+      - name: Upload wheels
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-linux-${{ matrix.target }}-${{ matrix.python-version }}
+          path: dist
+          if-no-files-found: error
+
   python-macos:
     needs: version-guard
     name: Python macos ${{ matrix.python-version }} ${{ matrix.target }}
     runs-on: macos-latest
     timeout-minutes: 30
-    permissions:
-      contents: read
-      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -258,18 +264,58 @@ jobs:
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        uses: step-security/setup-protoc@d23a2fbf8225f60169d10a2b16a023b0381508bb # v3.0.1
         with:
           version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and publish wheels
+      - name: Build wheels
         uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
         with:
-          command: publish
+          command: build
           target: ${{ matrix.target }}
-          args: -i ${{ matrix.python-version }} --no-sdist --skip-existing -m src/python/Cargo.toml
+          args: -i ${{ matrix.python-version }} -m src/python/Cargo.toml --out dist --release
           sccache: "true"
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-macos-${{ matrix.target }}-${{ matrix.python-version }}
+          path: dist
+          if-no-files-found: error
+
+  publish-pypi:
+    name: Publish PyPI wheels
+    needs: [python-windows, python-linux, python-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify wheels only
+        run: |
+          set -euo pipefail
+          sdists="$(find dist -name '*.tar.gz' -type f)"
+          if [ -n "$sdists" ]; then
+            echo "::error::Found sdist artifacts; this release publishes wheels only."
+            echo "$sdists"
+            exit 1
+          fi
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: dist
+          skip-existing: true
 
   build-node:
     needs: version-guard
@@ -336,14 +382,14 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        uses: step-security/setup-protoc@d23a2fbf8225f60169d10a2b16a023b0381508bb # v3.0.1
         with:
           version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Zig
         if: contains(matrix.target, 'musl')
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        uses: step-security/setup-zig@1e9fbd457bcc3587b58845344a267f12f151709c # v2.2.2
         with:
           version: 0.15.2
 
@@ -389,6 +435,7 @@ jobs:
     needs: [version-guard, build-node]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: release
     env:
       DEBUG: "napi:*"
     # napi prepublish uploads the per-triple .node assets to the GitHub Release.
@@ -421,7 +468,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        uses: step-security/setup-protoc@d23a2fbf8225f60169d10a2b16a023b0381508bb # v3.0.1
         with:
           version: ${{ env.PROTOC_VERSION }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
@@ -475,5 +522,4 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # napi prepublish uploads .node assets to the Release
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true" # inherited by napi's per-triple npm publish
