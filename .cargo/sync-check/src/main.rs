@@ -35,6 +35,7 @@ fn check() -> Result<ExitCode, String> {
 
     git_mirror::fetch(&mirror)?;
 
+    let synced = git_mirror::head_matches(&mirror)?;
     let head = rev_parse(&mirror, "HEAD")?;
     let fetched = rev_parse(&mirror, "FETCH_HEAD")?;
     let summary = fetch_head_summary(&mirror)?;
@@ -43,7 +44,7 @@ fn check() -> Result<ExitCode, String> {
     println!("FETCH_HEAD: {fetched}");
     println!("{summary}");
 
-    if head == fetched {
+    if synced {
         println!("SYNCED");
         return Ok(ExitCode::SUCCESS);
     }
@@ -58,7 +59,12 @@ fn rev_parse(mirror: &Path, rev: &str) -> Result<String, String> {
         return Err(format!("git rev-parse {rev} failed"));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("git rev-parse {rev} printed no commit"))
 }
 
 fn fetch_head_summary(mirror: &Path) -> Result<String, String> {

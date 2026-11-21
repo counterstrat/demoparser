@@ -20,9 +20,9 @@ fn main() -> Result<()> {
     }
 
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let workspace_root = manifest_dir.join("../..");
-    let csgoproto_dir = manifest_dir.join("../csgoproto");
-    let codegen_target_dir = codegen_target_dir(&workspace_root);
+    let workspace_root = manifest_dir.parent().and_then(Path::parent).unwrap_or(&manifest_dir);
+    let csgoproto_dir = manifest_dir.parent().unwrap_or(&manifest_dir).join("csgoproto");
+    let codegen_target_dir = codegen_target_dir(workspace_root);
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
     let codegen_context = "csgoproto codegen (cargo run in csgoproto)";
 
@@ -66,7 +66,7 @@ fn main() -> Result<()> {
 fn codegen_target_dir(workspace_root: &Path) -> PathBuf {
     let target_root = match std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
-        .filter(|dir| !dir.as_os_str().is_empty())
+        .filter(|dir| !dir.to_string_lossy().trim().is_empty())
     {
         Some(dir) if dir.is_absolute() => dir,
         Some(dir) => workspace_root.join(dir),

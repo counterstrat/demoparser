@@ -6,6 +6,8 @@ const WITHOUT_FIELD: &str = "\
 /// A doc comment with a stray `}` brace.
 pub struct CMsgServerUserCmd {
     // A line comment with a stray } brace.
+    /* A block comment with a nested /* comment */ and a stray } brace. */
+    #[doc = r\"}\" ]
     #[prost(int32, optional, tag=\"5\")]
     pub client_tick: ::core::option::Option<i32>,
 }

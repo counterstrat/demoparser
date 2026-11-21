@@ -4,6 +4,7 @@ use csgoproto::{EBaseGameEvents, EBaseUserMessages, ECsgoGameEvents, ECstrike15U
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Result;
+use std::path::Path;
 use strum::IntoEnumIterator;
 
 mod codegen_parser;
@@ -68,8 +69,8 @@ fn append_line(mut output: String, tab_size: usize, value: &str) -> String {
 }
 
 fn create_data_maps(out_dir: &str) -> Result<()> {
-    let items = GameItems::try_from("GameTracking-CS2/game/csgo/pak01_dir/scripts/items/items_game.txt")?;
-    let translation = Translation::try_from("GameTracking-CS2/game/csgo/pak01_dir/resource/csgo_english.txt")?;
+    let items = GameItems::try_from(game_tracking_file("game/csgo/pak01_dir/scripts/items/items_game.txt").as_str())?;
+    let translation = Translation::try_from(game_tracking_file("game/csgo/pak01_dir/resource/csgo_english.txt").as_str())?;
 
     let mut output = String::from(GENERATED_HEADER);
     output += "\nuse phf::phf_map;\n";
@@ -78,6 +79,14 @@ fn create_data_maps(out_dir: &str) -> Result<()> {
     output += &create_stickers_map(&items);
     output += &create_weapons_map(&items, &translation);
     write_if_changed(&format!("{out_dir}/{MAPS_FILE}"), output.as_bytes())
+}
+
+fn game_tracking_file(relative: &str) -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("GameTracking-CS2")
+        .join(relative)
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn write_if_changed(path: &str, contents: &[u8]) -> Result<()> {

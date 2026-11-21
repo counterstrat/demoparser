@@ -49,6 +49,8 @@ fn matching_brace(source: &str, body_start: usize) -> Option<usize> {
                     index += 1;
                 }
             }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => index = block_comment_end(bytes, index),
+            b'r' => index = raw_string_end(bytes, index).unwrap_or(index + 1),
             b'"' => index = quoted_end(bytes, index),
             b'\'' => index = char_literal_end(bytes, index).unwrap_or(index + 1),
             b'{' => {
@@ -66,6 +68,75 @@ fn matching_brace(source: &str, body_start: usize) -> Option<usize> {
         }
     }
     None
+}
+
+fn block_comment_end(bytes: &[u8], opening: usize) -> usize {
+    let mut depth = 1usize;
+    let mut index = opening + 2;
+
+    while index < bytes.len() {
+        if bytes[index] == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            depth += 1;
+            index += 2;
+        } else if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+            depth -= 1;
+            index += 2;
+            if depth == 0 {
+                return index;
+            }
+        } else {
+            index += 1;
+        }
+    }
+    index
+}
+
+fn raw_string_end(bytes: &[u8], r: usize) -> Option<usize> {
+    if !is_prefix_boundary(bytes, r) {
+        return None;
+    }
+
+    let mut index = r + 1;
+    let mut hashes = 0usize;
+    while bytes.get(index) == Some(&b'#') {
+        hashes += 1;
+        index += 1;
+    }
+    if bytes.get(index) != Some(&b'"') {
+        return None;
+    }
+
+    index += 1;
+    while index < bytes.len() {
+        if bytes[index] == b'"' {
+            let mut closing = index + 1;
+            let mut remaining = hashes;
+            while remaining > 0 && bytes.get(closing) == Some(&b'#') {
+                closing += 1;
+                remaining -= 1;
+            }
+            if remaining == 0 {
+                return Some(closing);
+            }
+        }
+        index += 1;
+    }
+    Some(bytes.len())
+}
+
+fn is_prefix_boundary(bytes: &[u8], position: usize) -> bool {
+    let Some(previous) = position.checked_sub(1).and_then(|index| bytes.get(index)) else {
+        return true;
+    };
+    if *previous == b'b' {
+        let before_b = position.checked_sub(2).and_then(|index| bytes.get(index));
+        return before_b.is_none_or(|byte| !is_identifier_byte(*byte));
+    }
+    !is_identifier_byte(*previous)
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte == b'_' || byte.is_ascii_alphanumeric()
 }
 
 fn quoted_end(bytes: &[u8], opening: usize) -> usize {
@@ -112,14 +183,23 @@ fn field_tag(body: &str, field_start: usize) -> Option<&str> {
 }
 
 fn tag_attribute_value(attribute: &str) -> Option<&str> {
-    let mut remaining = attribute;
-    while let Some(tag_start) = remaining.find("tag") {
-        let after_tag = &remaining[tag_start + "tag".len()..];
-        if let Some(after_equals) = after_tag.trim_start().strip_prefix('=') {
-            let value = after_equals.trim_start().strip_prefix('"')?;
-            return value.find('"').map(|end| &value[..end]);
+    let bytes = attribute.as_bytes();
+    let mut search_from = 0usize;
+
+    while let Some(offset) = attribute[search_from..].find("tag") {
+        let tag_start = search_from + offset;
+        search_from = tag_start + "tag".len();
+
+        if tag_start > 0 && is_identifier_byte(bytes[tag_start - 1]) {
+            continue;
         }
-        remaining = after_tag;
+
+        let after_tag = &attribute[search_from..];
+        let Some(after_equals) = after_tag.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let value = after_equals.trim_start().strip_prefix('"')?;
+        return value.find('"').map(|end| &value[..end]);
     }
     None
 }
