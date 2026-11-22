@@ -1,6 +1,6 @@
 name: Release
 
-# Wheels only for 0.1.0: no sdist is published, matching the retired deploy.yml.
+# Wheels only: no sdist is published
 # Retry a failed run from the GitHub Release UI by re-running this workflow, and
 # publish a new version by cutting a new Release tag. There is no workflow_dispatch.
 
