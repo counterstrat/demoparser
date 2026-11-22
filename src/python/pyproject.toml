@@ -5,10 +5,31 @@ build-backend = "maturin"
 [project]
 name = "counterstrat-demoparser"
 version = "0.1.0"
-requires-python = ">=3.10"
-dependencies = ["pandas>=1.5.0", "numpy", "polars", "pyarrow", "tqdm"]
+description = "Fast Counter-Strike 2 demo parser with a pandas DataFrame API"
+readme = { file = "README.md", content-type = "text/markdown" }
+license = { text = "MIT" }
+authors = [{ name = "CounterStrat" }]
+keywords = ["cs2", "counter-strike", "demo", "parser", "pandas", "replay"]
+requires-python = ">=3.11"
+dependencies = ["pandas>=3.1", "numpy>=2.0", "polars>=1.44", "pyarrow>=26"]
 classifiers = [
-    "Programming Language :: Rust",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Rust",
+    "Topic :: Games/Entertainment",
+    "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://github.com/counterstrat/demoparser"
+Repository = "https://github.com/counterstrat/demoparser"
+Documentation = "https://github.com/counterstrat/demoparser/tree/main/documentation/python"
+Issues = "https://github.com/counterstrat/demoparser/issues"

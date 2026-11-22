@@ -15,10 +15,12 @@ use parser::second_pass::variants::VarVec;
 use parser::second_pass::variants::Variant;
 use polars::prelude::ArrayRef;
 use polars::prelude::ArrowField;
+use polars::prelude::CompatLevel;
 use polars::prelude::NamedFrom;
+use polars::prelude::PlSmallStr;
 use polars::series::Series;
 use polars_arrow::array::{
-    Array, BooleanArray, Float32Array, Int32Array, UInt32Array, UInt64Array,
+    BooleanArray, Float32Array, Int32Array, UInt32Array, UInt64Array,
 };
 use polars_arrow::ffi;
 use pyo3::exceptions::PyValueError;
@@ -244,7 +246,7 @@ fn build_pandas_df<'py>(py: Python<'py>, columns: &[(String, Option<&VarVec>)], 
     let mut dict_cols: Vec<(usize, String, Py<PyAny>)> = vec![];
     let mut list_cols: Vec<(String, Py<PyAny>)> = vec![];
     for (name, data) in columns {
-        let arr: Option<Box<dyn Array>> = match data {
+        let arr: Option<ArrayRef> = match data {
             None => Some(Box::new(Int32Array::from(vec![None; n_rows]))),
             Some(VarVec::F32(v)) => Some(Box::new(Float32Array::from(v))),
             Some(VarVec::I32(v)) => Some(Box::new(Int32Array::from(v))),
@@ -252,8 +254,8 @@ fn build_pandas_df<'py>(py: Python<'py>, columns: &[(String, Option<&VarVec>)], 
             Some(VarVec::U32(v)) => Some(Box::new(UInt32Array::from(v))),
             Some(VarVec::Bool(v)) => Some(Box::new(BooleanArray::from(v))),
             Some(VarVec::String(v)) => {
-                let s = Series::new(name, v).rechunk();
-                Some(s.to_arrow(0, false))
+                let s = Series::new(PlSmallStr::from(name), v).rechunk();
+                Some(s.to_arrow(0, CompatLevel::oldest()))
             }
             Some(VarVec::StrDict(d)) => {
                 let pos = arrow_names.len() + dict_cols.len();
@@ -489,8 +491,8 @@ impl DemoParser {
     ) -> PyResult<Py<PyAny>> {
         // This function works similarly to parse_ticks but collects the props from grenades instead.
         let wanted_other_props = extra.unwrap_or_default();
-        let grenades = grenades.unwrap_or_default();
-        let skip_nones = skip_nones.unwrap_or_default();
+        let grenades = grenades.unwrap_or(true);
+        let skip_nones = skip_nones.unwrap_or(false);
         let real_other_props = match rm_user_friendly_names(&wanted_other_props) {
             Ok(real_props) => real_props,
             Err(e) => return Err(PyValueError::new_err(format!("{e}"))),
@@ -612,9 +614,10 @@ impl DemoParser {
         let names: Vec<Option<String>> = output.player_md.iter().map(|p| p.name.clone()).collect();
 
         // SoA form
-        let steamid = rust_series_to_py_series(&Series::new("Steamid", steamids))?;
+        let steamid =
+            rust_series_to_py_series(&Series::new(PlSmallStr::from("Steamid"), steamids))?;
         let team_number = arr_to_py(Box::new(Int32Array::from(team_numbers)))?;
-        let name = rust_series_to_py_series(&Series::new("param2", names))?;
+        let name = rust_series_to_py_series(&Series::new(PlSmallStr::from("param2"), names))?;
 
         let polars = py.import("polars")?;
         let all_series_py = [steamid, name, team_number].into_py_any(py)?;
@@ -682,7 +685,8 @@ impl DemoParser {
         let paint_index = arr_to_py(Box::new(UInt32Array::from(paint_index)))?;
         let paint_seed = arr_to_py(Box::new(UInt32Array::from(paint_seed)))?;
         let paint_wear = arr_to_py(Box::new(UInt32Array::from(paint_wear)))?;
-        let custom_name = rust_series_to_py_series(&Series::new("custom_name", custom_name))?;
+        let custom_name =
+            rust_series_to_py_series(&Series::new(PlSmallStr::from("custom_name"), custom_name))?;
 
         let polars = py.import("polars")?;
         let all_series_py = [
@@ -764,7 +768,8 @@ impl DemoParser {
         let paint_seed = arr_to_py(Box::new(UInt32Array::from(paint_seed)))?;
         let paint_wear = arr_to_py(Box::new(UInt32Array::from(paint_wear)))?;
         let steamid = arr_to_py(Box::new(UInt64Array::from(steamid)))?;
-        let custom_name = rust_series_to_py_series(&Series::new("custom_name", custom_name))?;
+        let custom_name =
+            rust_series_to_py_series(&Series::new(PlSmallStr::from("custom_name"), custom_name))?;
 
         let polars = py.import("polars")?;
         let all_series_py = [
@@ -1115,8 +1120,8 @@ pub(crate) fn to_py_array(
     array: ArrayRef,
 ) -> PyResult<Py<PyAny>> {
     let schema = Box::new(ffi::export_field_to_c(&ArrowField::new(
-        "",
-        array.data_type().clone(),
+        PlSmallStr::from(""),
+        array.dtype().clone(),
         true,
     )));
     let array = Box::new(ffi::export_array_to_c(array));
@@ -1136,7 +1141,7 @@ pub(crate) fn to_py_array(
 pub fn rust_series_to_py_series(series: &Series) -> PyResult<Py<PyAny>> {
     // ensure we have a single chunk
     let series = series.rechunk();
-    let array = series.to_arrow(0, false);
+    let array = series.to_arrow(0, CompatLevel::oldest());
 
     Python::attach(|py| {
         // import pyarrow
@@ -1153,7 +1158,7 @@ pub fn rust_series_to_py_series(series: &Series) -> PyResult<Py<PyAny>> {
 }
 
 /// <https://github.com/pola-rs/polars/blob/master/examples/python_rust_compiled_function/src/ffi.rs>
-pub fn arr_to_py(array: Box<dyn Array>) -> PyResult<Py<PyAny>> {
+pub fn arr_to_py(array: ArrayRef) -> PyResult<Py<PyAny>> {
     //let series = series.rechunk();
     //let array = series.to_arrow(0);
     Python::attach(|py| {
@@ -1303,7 +1308,7 @@ fn to_f32_series(pairs: &Vec<&EventField>, name: &str) -> DataFrameColumn {
             _ => v.push(None),
         }
     }
-    DataFrameColumn::Series(Series::new(name, v))
+    DataFrameColumn::Series(Series::new(PlSmallStr::from(name), v))
 }
 fn to_u32_series(pairs: &Vec<&EventField>, name: &str) -> DataFrameColumn {
     let mut v = vec![];
@@ -1313,7 +1318,7 @@ fn to_u32_series(pairs: &Vec<&EventField>, name: &str) -> DataFrameColumn {
             _ => v.push(None),
         }
     }
-    DataFrameColumn::Series(Series::new(name, v))
+    DataFrameColumn::Series(Series::new(PlSmallStr::from(name), v))
 }
 fn to_i32_series(pairs: &Vec<&EventField>, name: &str) -> DataFrameColumn {
     let mut v = vec![];
@@ -1323,7 +1328,7 @@ fn to_i32_series(pairs: &Vec<&EventField>, name: &str) -> DataFrameColumn {
             _ => v.push(None),
         }
     }
-    DataFrameColumn::Series(Series::new(name, v))
+    DataFrameColumn::Series(Series::new(PlSmallStr::from(name), v))
 }
 fn to_u64_series(pairs: &Vec<&EventField>, name: &str) -> DataFrameColumn {
     let mut v = vec![];
@@ -1333,7 +1338,7 @@ fn to_u64_series(pairs: &Vec<&EventField>, name: &str) -> DataFrameColumn {
             _ => v.push(None),
         }
     }
-    DataFrameColumn::Series(Series::new(name, v))
+    DataFrameColumn::Series(Series::new(PlSmallStr::from(name), v))
 }
 fn to_py_string_col(pairs: &Vec<&EventField>, _name: &str, py: Python) -> DataFrameColumn {
     let mut v = vec![];
@@ -1373,7 +1378,7 @@ fn to_string_series(pairs: &Vec<&EventField>, name: &str) -> DataFrameColumn {
             _ => v.push(None),
         }
     }
-    DataFrameColumn::Series(Series::new(name, v))
+    DataFrameColumn::Series(Series::new(PlSmallStr::from(name), v))
 }
 
 fn to_bool_series(pairs: &Vec<&EventField>, name: &str) -> DataFrameColumn {
@@ -1384,7 +1389,7 @@ fn to_bool_series(pairs: &Vec<&EventField>, name: &str) -> DataFrameColumn {
             _ => v.push(None),
         }
     }
-    DataFrameColumn::Series(Series::new(name, v))
+    DataFrameColumn::Series(Series::new(PlSmallStr::from(name), v))
 }
 fn to_py_xyz_col(pairs: &Vec<&EventField>, _name: &str, py: Python) -> DataFrameColumn {
     let mut v = vec![];
@@ -1435,7 +1440,7 @@ fn to_null_series(pairs: &Vec<&EventField>, name: &str) -> DataFrameColumn {
     for _ in pairs {
         v.push(None);
     }
-    DataFrameColumn::Series(Series::new(name, v))
+    DataFrameColumn::Series(Series::new(PlSmallStr::from(name), v))
 }
 
 pub fn column_from_pairs(

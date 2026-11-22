@@ -57,7 +57,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     defaults:
       run:
         working-directory: src/python
@@ -76,7 +76,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: src/python/requirements-ci.txt
+          cache-dependency-path: |
+            src/python/requirements-ci.txt
+            src/python/pyproject.toml
 
       - name: Install Protoc
         uses: step-security/setup-protoc@d23a2fbf8225f60169d10a2b16a023b0381508bb # v3.0.1

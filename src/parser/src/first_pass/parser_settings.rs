@@ -213,8 +213,9 @@ pub fn check_multithreadability(player_props: &[String]) -> bool {
 pub fn rm_user_friendly_names(names: &Vec<String>) -> Result<Vec<String>, DemoParserError> {
     let mut real_names = vec![];
     for name in names {
-        let mut n = if name.starts_with("Weapon.") { name.split_at(7).1 } else { name };
-        n = if name.starts_with("Grenade.") { name.split_at(8).1 } else { n };
+        let name = name.as_str();
+        let n = name.strip_prefix("Weapon.").unwrap_or(name);
+        let n = n.strip_prefix("Grenade.").unwrap_or(n);
         match FRIENDLY_NAMES_MAPPING.get(n) {
             Some(real_name) => real_names.push(real_name.to_string()),
             None => real_names.push(n.to_string()),
@@ -226,8 +227,9 @@ pub fn rm_user_friendly_names(names: &Vec<String>) -> Result<Vec<String>, DemoPa
 pub fn rm_map_user_friendly_names(map: &AHashMap<String, Variant>) -> Result<AHashMap<String, Variant>, DemoParserError> {
     let mut real_names_map: AHashMap<String, Variant> = AHashMap::default();
     for (name, variant) in map {
-        let n = if name.starts_with("Weapon.") { name.split_at(7).1 } else { name };
-        match FRIENDLY_NAMES_MAPPING.get(&n) {
+        let n = name.strip_prefix("Weapon.").unwrap_or(name);
+        let n = n.strip_prefix("Grenade.").unwrap_or(n);
+        match FRIENDLY_NAMES_MAPPING.get(n) {
             Some(real_name) => real_names_map.insert(real_name.to_string(), variant.clone()),
             None => real_names_map.insert(n.to_string(), variant.clone()),
         };
@@ -247,4 +249,37 @@ pub fn create_mmap(path: String) -> Result<Mmap, DemoParserError> {
         }
     };
     Ok(mmap)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_friendly_names_strips_weapon_and_grenade_prefixes() {
+        let names = vec![
+            "Weapon.unmapped_prop".to_string(),
+            "Grenade.unmapped_prop".to_string(),
+            "unmapped_prop".to_string(),
+        ];
+
+        let real = rm_user_friendly_names(&names).unwrap();
+
+        assert_eq!(real, vec!["unmapped_prop".to_string(); 3]);
+    }
+
+    #[test]
+    fn map_user_friendly_names_strips_weapon_and_grenade_prefixes() {
+        let mut map = AHashMap::default();
+        map.insert("Weapon.unmapped_weapon_prop".to_string(), Variant::Bool(true));
+        map.insert("Grenade.unmapped_grenade_prop".to_string(), Variant::Bool(false));
+
+        let real = rm_map_user_friendly_names(&map).unwrap();
+
+        assert_eq!(real.len(), 2);
+        assert_eq!(real.get("unmapped_weapon_prop"), Some(&Variant::Bool(true)));
+        assert_eq!(real.get("unmapped_grenade_prop"), Some(&Variant::Bool(false)));
+        assert!(!real.contains_key("Weapon.unmapped_weapon_prop"));
+        assert!(!real.contains_key("Grenade.unmapped_grenade_prop"));
+    }
 }
