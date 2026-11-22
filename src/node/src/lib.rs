@@ -553,24 +553,11 @@ pub fn parse_events(
   Ok(s)
 }
 
-#[napi]
-pub fn parse_ticks(
-  path_or_buf: Either<String, Buffer>,
-  wanted_props: Vec<String>,
-  wanted_ticks: Option<Vec<i32>>,
-  wanted_players: Option<Vec<String>>,
-  struct_of_arrays: Option<bool>,
-  order_by_steamid: Option<bool>,
+type ResolvedPropStates = (AHashMap<String, Variant>, Vec<(String, String)>);
+
+fn resolve_prop_states(
   prop_states: Option<Vec<WantedPropState>>,
-) -> napi::Result<Value> {
-  let mut real_names = match rm_user_friendly_names(&wanted_props) {
-    Ok(names) => names,
-    Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
-  };
-  let wanted_players_u64 = match wanted_players {
-    Some(v) => v.iter().map(|x| x.parse::<u64>().unwrap_or(0)).collect(),
-    None => vec![],
-  };
+) -> napi::Result<ResolvedPropStates> {
   let prop_states = prop_states.unwrap_or_default();
   let mut seen_prop_states = HashSet::new();
   for prop in &prop_states {
@@ -596,7 +583,10 @@ pub fn parse_ticks(
     if !seen_real_prop_state_names.insert(real_name.clone()) {
       return Err(Error::new(
         Status::InvalidArg,
-        format!("Multiple prop states resolve to the same real name `{}`", real_name),
+        format!(
+          "Multiple prop states resolve to the same real name `{}`",
+          real_name
+        ),
       ));
     }
   }
@@ -613,6 +603,32 @@ pub fn parse_ticks(
     };
     real_wanted_prop_states.insert(real_name.clone(), state.clone());
   }
+  let prop_state_names = real_wanted_prop_state_names
+    .into_iter()
+    .zip(wanted_prop_state_names)
+    .collect();
+  Ok((real_wanted_prop_states, prop_state_names))
+}
+
+#[napi]
+pub fn parse_ticks(
+  path_or_buf: Either<String, Buffer>,
+  wanted_props: Vec<String>,
+  wanted_ticks: Option<Vec<i32>>,
+  wanted_players: Option<Vec<String>>,
+  struct_of_arrays: Option<bool>,
+  order_by_steamid: Option<bool>,
+  prop_states: Option<Vec<WantedPropState>>,
+) -> napi::Result<Value> {
+  let mut real_names = match rm_user_friendly_names(&wanted_props) {
+    Ok(names) => names,
+    Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
+  };
+  let wanted_players_u64 = match wanted_players {
+    Some(v) => v.iter().map(|x| x.parse::<u64>().unwrap_or(0)).collect(),
+    None => vec![],
+  };
+  let (real_wanted_prop_states, prop_state_names) = resolve_prop_states(prop_states)?;
 
   let bytes = resolve_byte_type(path_or_buf)?;
   let huf = create_huffman_lookup_table();
@@ -621,10 +637,7 @@ pub fn parse_ticks(
   for (real_name, user_friendly_name) in real_names.iter().zip(&wanted_props) {
     real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
   }
-  for (real_name, user_friendly_name) in real_wanted_prop_state_names
-    .iter()
-    .zip(&wanted_prop_state_names)
-  {
+  for (real_name, user_friendly_name) in &prop_state_names {
     real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
   }
 
@@ -722,6 +735,7 @@ pub fn parse_tick_range(
   tick_hi: i32,
   wanted_players: Option<Vec<String>>,
   struct_of_arrays: Option<bool>,
+  prop_states: Option<Vec<WantedPropState>>,
 ) -> napi::Result<Value> {
   let mut real_names = match rm_user_friendly_names(&wanted_props) {
     Ok(names) => names,
@@ -731,12 +745,16 @@ pub fn parse_tick_range(
     Some(v) => v.iter().map(|x| x.parse::<u64>().unwrap_or(0)).collect(),
     None => vec![],
   };
+  let (real_wanted_prop_states, prop_state_names) = resolve_prop_states(prop_states)?;
 
   let bytes = resolve_byte_type(path_or_buf)?;
   let huf = create_huffman_lookup_table();
   let mut real_name_to_og_name = AHashMap::default();
 
   for (real_name, user_friendly_name) in real_names.iter().zip(&wanted_props) {
+    real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
+  }
+  for (real_name, user_friendly_name) in &prop_state_names {
     real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
   }
 
@@ -748,7 +766,7 @@ pub fn parse_tick_range(
     wanted_events: vec![],
     collect_ticks: true,
     parse_voice: false,
-    wanted_prop_states: AHashMap::default(),
+    wanted_prop_states: real_wanted_prop_states,
     parse_ents: true,
     wanted_ticks: vec![],
     parse_projectiles: false,

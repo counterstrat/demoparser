@@ -37,7 +37,30 @@ await init();
 `parseTicks` and `parseTickRange` accept `{ prop, state }` objects in both the
 native and WASM bindings. `state` may be a boolean, string, finite number, or
 BigInt; integers above `u32::MAX` (4294967295) must be BigInt. A tick is kept
-only when every player matches every wanted state.
+only when every player matches every wanted state. `null` or an empty array
+means no filter.
+
+Both bindings take the same positional arguments in the same order; only the
+first argument differs (native accepts a path or Buffer, WASM takes the demo
+bytes). `propStates` is last, after `orderBySteamid`.
+
+```JavaScript
+// Native: path or Buffer.
+parseTicks('demo.dem', ['health'], null, null, false, false, [
+  { prop: 'health', state: 100 }
+])
+
+// WASM: demo bytes.
+parseTicks(bytes, ['health'], null, null, false, false, [
+  { prop: 'health', state: 100 }
+])
+```
+
+`ChunkParser` ticks mode accepts the same filter through
+`opts.propStates`; grenades mode rejects it instead of silently ignoring it.
+Native and WASM use different error text for malformed `propStates` (napi
+validates the object shape, WASM parses it by hand), but both reject the same
+inputs.
 
 ## Building from source
 

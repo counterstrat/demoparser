@@ -13,8 +13,15 @@
 //
 // The prop-state surface is also guarded: `parseTicks` and `parseTickRange`
 // must keep their `prop_states` parameter in both `lib.rs` and the generated
-// declarations, and the `ChunkParser` opts docs must keep `propStates`, so a
-// stale build cannot silently drop the filter.
+// declarations, `ChunkOpts` must keep its serde-mapped `propStates` field,
+// the `ChunkParser` constructor must read it through `Reflect`, and the
+// generated `ChunkOpts` TypeScript interface must expose it. `parseTicks`
+// must also keep `order_by_steamid` between `struct_of_arrays` and
+// `prop_states` in both signatures and thread it into `ParserInputs`, so the
+// WASM argument order cannot drift from native. Signatures and
+// struct/function bodies are parsed structurally (balanced parens/braces,
+// comments and strings masked), so docs and substrings cannot satisfy the
+// guard.
 //
 // Run: `node check-wasm-exports.js` (from `src/node/`). Exit non-zero
 // lists the missing names.
@@ -89,6 +96,130 @@ const jsNameOf = (attrs, rustName) => {
 
 const libSrc = readFileSync(join(dir, '../wasm/src/lib.rs'), 'utf8')
 
+// Blank comments and string/char literals while keeping byte positions, so
+// structural scans (balanced braces/parens, signatures) never trip over
+// braces in doc comments or error strings. Raw strings matter here because
+// `typescript_custom_section` embeds TypeScript with braces.
+const maskTrivia = (source, rust) => {
+  const out = source.split('')
+  const blank = (start, end) => {
+    for (let i = start; i < end && i < out.length; i += 1) {
+      if (out[i] !== '\n' && out[i] !== '\r') out[i] = ' '
+    }
+  }
+  let i = 0
+  while (i < source.length) {
+    if (source.startsWith('//', i)) {
+      const newline = source.indexOf('\n', i)
+      const stop = newline === -1 ? source.length : newline
+      blank(i, stop)
+      i = stop
+    } else if (source.startsWith('/*', i)) {
+      let depth = 1
+      let j = i + 2
+      while (j < source.length && depth > 0) {
+        if (source.startsWith('/*', j)) {
+          depth += 1
+          j += 2
+        } else if (source.startsWith('*/', j)) {
+          depth -= 1
+          j += 2
+        } else {
+          j += 1
+        }
+      }
+      blank(i, j)
+      i = j
+    } else if (rust && source[i] === 'r' && (i === 0 || !/[A-Za-z0-9_]/.test(source[i - 1]))) {
+      const prefix = /^r(#*)"/.exec(source.slice(i))
+      if (!prefix) {
+        i += 1
+        continue
+      }
+      const close = `"${prefix[1]}`
+      const start = i + prefix[0].length
+      const found = source.indexOf(close, start)
+      const stop = found === -1 ? source.length : found + close.length
+      blank(i, stop)
+      i = stop
+    } else if (source[i] === '"') {
+      let j = i + 1
+      while (j < source.length) {
+        if (source[j] === '\\') {
+          j += 2
+          continue
+        }
+        if (source[j] === '"') {
+          j += 1
+          break
+        }
+        j += 1
+      }
+      blank(i, j)
+      i = j
+    } else if (!rust && source[i] === "'") {
+      let j = i + 1
+      while (j < source.length) {
+        if (source[j] === '\\') {
+          j += 2
+          continue
+        }
+        if (source[j] === "'") {
+          j += 1
+          break
+        }
+        j += 1
+      }
+      blank(i, j)
+      i = j
+    } else if (rust && source[i] === "'") {
+      const charLiteral = /^'(?:\\.|[^\\'])'/.exec(source.slice(i, i + 8))
+      if (charLiteral) {
+        blank(i, i + charLiteral[0].length)
+        i += charLiteral[0].length
+      } else {
+        i += 1
+      }
+    } else {
+      i += 1
+    }
+  }
+  return out.join('')
+}
+
+const maskedLib = maskTrivia(libSrc, true)
+const maskedTypes = maskTrivia(typesSource, false)
+
+const endOfBalanced = (source, openIndex) => {
+  const close = { '(': ')', '{': '}', '[': ']' }[source[openIndex]]
+  if (!close) return -1
+  let depth = 0
+  for (let i = openIndex; i < source.length; i += 1) {
+    if (source[i] === source[openIndex]) depth += 1
+    else if (source[i] === close) {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
+const bodyAfter = (source, pattern) => {
+  const match = pattern.exec(source)
+  if (!match) return null
+  const openIndex = match.index + match[0].length - 1
+  const end = endOfBalanced(source, openIndex)
+  return end === -1 ? null : { start: openIndex + 1, end }
+}
+
+const paramsOf = (source, pattern) => {
+  const match = pattern.exec(source)
+  if (!match) return null
+  const openIndex = match.index + match[0].length - 1
+  const end = endOfBalanced(source, openIndex)
+  return end === -1 ? null : source.slice(openIndex + 1, end)
+}
+
 const countBraces = (line) => (line.match(/\{/g)?.length ?? 0) - (line.match(/\}/g)?.length ?? 0)
 
 const stripLiterals = (line) =>
@@ -100,7 +231,7 @@ const stripLiterals = (line) =>
 const wanted = []
 let depth = 0
 let pendingAttrs = null
-for (const rawLine of libSrc.split('\n')) {
+for (const rawLine of maskedLib.split('\n')) {
   const line = stripLiterals(rawLine)
   if (depth === 0) {
     const attribute = line.trim().match(/^#\[wasm_bindgen(?:\((.*)\))?\]$/)
@@ -149,19 +280,82 @@ const missingFromAdapter = wanted.filter((name) => !adapterApiNames.includes(nam
 const extraInAdapter = adapterApiNames.filter((name) => !wanted.includes(name))
 const hasDefaultInit = /export\s+default\s+wasm\.default/.test(wasmNodeSource)
 
-const rustParameters = (name) => {
-  const signature = new RegExp(`fn\\s+${name}\\s*\\(([\\s\\S]*?)\\)\\s*->`).exec(libSrc)
-  return signature?.[1] ?? ''
-}
-const tsParameters = (name) => {
-  const signature = new RegExp(`export function ${name}\\(([^)]*)\\)`).exec(typesSource)
-  return signature?.[1] ?? ''
-}
+const rustParameters = (name) => paramsOf(maskedLib, new RegExp(`\\bfn\\s+${name}\\s*\\(`))
+const tsParameters = (name) =>
+  paramsOf(maskedTypes, new RegExp(`\\bexport\\s+function\\s+${name}\\s*\\(`))
+
 const propStateFunctions = ['parseTicks', 'parseTickRange']
-const missingPropStateParams = propStateFunctions.filter(
-  (name) => !/\bprop_states\s*:/.test(rustParameters(name)) || !/\bprop_states\b/.test(tsParameters(name))
-)
-const missingChunkPropStates = !/propStates/.test(libSrc) || !/propStates/.test(typesSource)
+const missingPropStateParams = propStateFunctions.filter((name) => {
+  const rust = rustParameters(name)
+  const ts = tsParameters(name)
+  return rust === null || !/\bprop_states\s*:/.test(rust) || ts === null || !/\bprop_states\b/.test(ts)
+})
+
+const functionBodyOf = (name) => {
+  const match = new RegExp(`\\bfn\\s+${name}\\s*\\(`).exec(maskedLib)
+  if (!match) return null
+  const paramsOpen = match.index + match[0].length - 1
+  const paramsEnd = endOfBalanced(maskedLib, paramsOpen)
+  if (paramsEnd === -1) return null
+  const bodyStart = maskedLib.indexOf('{', paramsEnd)
+  if (bodyStart === -1) return null
+  const bodyEnd = endOfBalanced(maskedLib, bodyStart)
+  return bodyEnd === -1 ? null : libSrc.slice(bodyStart, bodyEnd)
+}
+
+const paramsInOrder = (params, names) => {
+  if (params === null) return false
+  let cursor = 0
+  for (const name of names) {
+    const match = new RegExp(`\\b${name}\\s*\\??\\s*:`).exec(params.slice(cursor))
+    if (!match) return false
+    cursor += match.index + match[0].length
+  }
+  return true
+}
+
+const parseTicksParams = ['struct_of_arrays', 'order_by_steamid', 'prop_states']
+const parseTicksBody = functionBodyOf('parseTicks') ?? ''
+const parseTicksOrderOk =
+  paramsInOrder(rustParameters('parseTicks'), parseTicksParams) &&
+  paramsInOrder(tsParameters('parseTicks'), parseTicksParams) &&
+  /let\s+order_by_steamid\s*=\s*match\s+order_by_steamid\b/.test(parseTicksBody) &&
+  /\border_by_steamid\s*:\s*order_by_steamid\b/.test(parseTicksBody)
+
+const chunkOptsRange = bodyAfter(maskedLib, /\bstruct\s+ChunkOpts\s*\{/)
+const chunkOptsSource = chunkOptsRange
+  ? libSrc.slice(chunkOptsRange.start, chunkOptsRange.end)
+  : ''
+const chunkOptsHasPropStates =
+  /#\[serde\([\s\S]*?rename\s*=\s*"propStates"[\s\S]*?\)\]\s*prop_states\s*:/.test(chunkOptsSource)
+
+const chunkImplRange = bodyAfter(maskedLib, /\bimpl\s+ChunkParser\s*\{/)
+const chunkImplMasked = chunkImplRange
+  ? maskedLib.slice(chunkImplRange.start, chunkImplRange.end)
+  : ''
+const chunkImplSource = chunkImplRange ? libSrc.slice(chunkImplRange.start, chunkImplRange.end) : ''
+const newMatch = /\bfn\s+new\s*\(/.exec(chunkImplMasked)
+let chunkConstructorReadsPropStates = false
+if (newMatch) {
+  const paramsOpen = newMatch.index + newMatch[0].length - 1
+  const paramsEnd = endOfBalanced(chunkImplMasked, paramsOpen)
+  const bodyStart = paramsEnd === -1 ? -1 : chunkImplMasked.indexOf('{', paramsEnd)
+  const bodyEnd = bodyStart === -1 ? -1 : endOfBalanced(chunkImplMasked, bodyStart)
+  const body =
+    bodyStart === -1 || bodyEnd === -1 ? '' : chunkImplSource.slice(bodyStart, bodyEnd)
+  chunkConstructorReadsPropStates = /Reflect::get\s*\([^;]*?JsValue::from_str\s*\(\s*"propStates"\s*\)/.test(
+    body
+  )
+}
+
+const chunkOptsTypeRange = bodyAfter(maskedTypes, /\binterface\s+ChunkOpts\s*\{/)
+const chunkOptsTypeSource = chunkOptsTypeRange
+  ? typesSource.slice(chunkOptsTypeRange.start, chunkOptsTypeRange.end)
+  : ''
+const chunkOptsTypeHasPropStates = /\bpropStates\s*\??\s*:/.test(chunkOptsTypeSource)
+
+const missingChunkPropStates =
+  !chunkOptsHasPropStates || !chunkConstructorReadsPropStates || !chunkOptsTypeHasPropStates
 
 if (missingRuntime.length > 0) {
   console.error(`check-wasm-exports: wasm JS glue is missing exports: ${missingRuntime.join(', ')}`)
@@ -186,8 +380,17 @@ if (missingPropStateParams.length > 0) {
     `check-wasm-exports: propStates is not exposed on: ${missingPropStateParams.join(', ')}`
   )
 }
+if (!parseTicksOrderOk) {
+  console.error(
+    'check-wasm-exports: parseTicks must keep struct_of_arrays, order_by_steamid, prop_states in that order in lib.rs and the generated declarations, and thread order_by_steamid into ParserInputs'
+  )
+}
 if (missingChunkPropStates) {
-  console.error('check-wasm-exports: ChunkParser opts is missing the propStates option')
+  const gaps = []
+  if (!chunkOptsHasPropStates) gaps.push('ChunkOpts.propStates field')
+  if (!chunkConstructorReadsPropStates) gaps.push('constructor Reflect read')
+  if (!chunkOptsTypeHasPropStates) gaps.push('ChunkOpts TypeScript interface')
+  console.error(`check-wasm-exports: ChunkParser opts is missing propStates support: ${gaps.join(', ')}`)
 }
 if (!hasDefaultInit) {
   console.error('check-wasm-exports: wasm-node.js must re-export the default init function only')
@@ -200,6 +403,7 @@ if (
   missingFromAdapter.length > 0 ||
   extraInAdapter.length > 0 ||
   missingPropStateParams.length > 0 ||
+  !parseTicksOrderOk ||
   missingChunkPropStates ||
   !hasDefaultInit
 ) {

@@ -11,9 +11,20 @@ try {
   console.warn(`wasm prop-state parity tests skipped: ${error.message}`)
 }
 
-const wasmTest = wasm
+const wasmSupportsPropStates = Boolean(
+  wasm &&
+    typeof wasm.parseTicks === 'function' &&
+    wasm.parseTicks.length >= 7 &&
+    typeof wasm.parseTickRange === 'function' &&
+    wasm.parseTickRange.length >= 7
+)
+
+const skipReason = wasm
+  ? 'wasm build predates propStates support; run `npm run build:wasm`'
+  : 'wasm build output is not built'
+const wasmTest = wasmSupportsPropStates
   ? test
-  : (name, fn) => test(name, { skip: 'wasm build output is not built' }, fn)
+  : (name, fn) => test(name, { skip: skipReason }, fn)
 
 const demoPath = fileURLToPath(new URL('../../parser/test_demo.dem', import.meta.url))
 const bytes = new Uint8Array(readFileSync(demoPath))
@@ -30,8 +41,11 @@ const plain = (value) => {
 const nativeTicks = (props, wantedTicks, propStates) =>
   native.parseTicks(demoPath, props, wantedTicks, null, false, false, propStates)
 
-const wasmTicks = (props, wantedTicks, propStates) =>
-  wasm.parseTicks(bytes, props, wantedTicks, null, false, propStates)
+const nativeRange = (props, lo, hi, propStates) =>
+  native.parseTickRange(demoPath, props, lo, hi, null, false, propStates)
+
+const wasmTicks = (props, wantedTicks, propStates, orderBySteamid = false) =>
+  wasm.parseTicks(bytes, props, wantedTicks, null, false, orderBySteamid, propStates)
 
 const wasmRange = (props, lo, hi, propStates) =>
   wasm.parseTickRange(bytes, props, lo, hi, null, false, propStates)
@@ -59,6 +73,34 @@ wasmTest('parseTicks propStates matches native', async (t) => {
   }
 })
 
+wasmTest('u64-backed steamid column matches native', () => {
+  const expected = nativeTicks(['steamid'], [100], null)
+  const actual = plain(wasmTicks(['steamid'], [100], null))
+  assert.deepEqual(actual, expected)
+  assert.ok(actual.every((row) => typeof row.steamid === 'string'))
+})
+
+wasmTest('parseTicks orderBySteamid matches native', async (t) => {
+  const props = ['health']
+
+  for (const orderBySteamid of [false, true]) {
+    await t.test(String(orderBySteamid), () => {
+      const expected = native.parseTicks(demoPath, props, ticks, null, false, orderBySteamid, null)
+      const actual = plain(wasmTicks(props, ticks, null, orderBySteamid))
+      assert.deepEqual(actual, expected)
+    })
+  }
+
+  const unordered = plain(wasmTicks(props, ticks, null, false))
+  const ordered = plain(wasmTicks(props, ticks, null, true))
+  assert.ok(Array.isArray(unordered))
+  assert.ok(!Array.isArray(ordered))
+  assert.ok(ordered[Object.keys(ordered)[0]].tick.every((tick, index, all) => index === 0 || tick >= all[index - 1]))
+})
+
+// Native validates `WantedPropState` through napi/serde; WASM parses the same
+// shape by hand, so the rejection text differs. Assert exact WASM text and a
+// stable native pattern so neither side can drift silently.
 const rejectionCases = [
   [
     'duplicate prop',
@@ -66,7 +108,8 @@ const rejectionCases = [
       { prop: 'team_name', state: 'CT' },
       { prop: 'team_name', state: 'TERRORIST' }
     ],
-    /Duplicate prop state/
+    /Duplicate prop state/,
+    'Duplicate prop state for `team_name`'
   ],
   [
     'alias collision',
@@ -74,46 +117,155 @@ const rejectionCases = [
       { prop: 'team_name', state: 'CT' },
       { prop: 'CCSTeam.m_szTeamname', state: 'TERRORIST' }
     ],
-    /same real name/
+    /same real name/,
+    'Multiple prop states resolve to the same real name `CCSTeam.m_szTeamname`'
   ],
-  ['missing state', [{ prop: 'team_name' }], /state/],
-  ['missing prop', [{ state: 'CT' }], /prop/],
-  ['NaN', [{ prop: 'team_name', state: NaN }], /finite/],
-  ['Infinity', [{ prop: 'team_name', state: Infinity }], /finite/],
-  ['number above u32', [{ prop: 'team_name', state: 4294967296 }], /BigInt/],
-  ['negative bigint', [{ prop: 'team_name', state: -1n }], /Unsupported number type/],
-  ['bigint above u64', [{ prop: 'team_name', state: 18446744073709551616n }], /Unsupported number type/],
+  [
+    'missing state',
+    [{ prop: 'team_name' }],
+    /Missing field `state`/,
+    'Expected a boolean, string, number, or bigint for a prop state'
+  ],
+  [
+    'missing prop',
+    [{ state: 'CT' }],
+    /Missing field `prop`/,
+    'propStates entries need a string `prop`'
+  ],
+  [
+    'NaN',
+    [{ prop: 'team_name', state: NaN }],
+    /Prop state numbers must be finite/,
+    'Prop state numbers must be finite'
+  ],
+  [
+    'Infinity',
+    [{ prop: 'team_name', state: Infinity }],
+    /Prop state numbers must be finite/,
+    'Prop state numbers must be finite'
+  ],
+  [
+    'number above u32',
+    [{ prop: 'team_name', state: 4294967296 }],
+    /BigInt/,
+    'Integer prop states above u32::MAX must be passed as BigInt'
+  ],
+  [
+    'negative bigint',
+    [{ prop: 'team_name', state: -1n }],
+    /Unsupported number type/,
+    'Unsupported number type'
+  ],
+  [
+    'bigint above u64',
+    [{ prop: 'team_name', state: 18446744073709551616n }],
+    /Unsupported number type/,
+    'Unsupported number type'
+  ],
   [
     'unsupported state object',
     [{ prop: 'team_name', state: {} }],
-    /boolean, string, number, or bigint|Unsupported type/
+    /Unsupported type for Variant/,
+    'Expected a boolean, string, number, or bigint for a prop state'
   ]
 ]
 
 wasmTest('propStates rejections match native', async (t) => {
-  for (const [name, propStates, pattern] of rejectionCases) {
+  for (const [name, propStates, nativePattern, wasmMessage] of rejectionCases) {
     await t.test(name, () => {
-      assert.throws(() => nativeTicks(['team_name'], ticks, propStates), pattern)
-      assert.throws(() => wasmTicks(['team_name'], ticks, propStates), pattern)
+      assert.throws(() => nativeTicks(['team_name'], ticks, propStates), nativePattern)
+      assert.throws(() => wasmTicks(['team_name'], ticks, propStates), { message: wasmMessage })
     })
   }
 })
 
-wasmTest('parseTickRange propStates matches native parseTicks', async (t) => {
+const acceptedEdgeCases = [
+  ['null means unfiltered', ['health'], ticks, null],
+  ['undefined means unfiltered', ['health'], ticks, undefined],
+  ['empty array means unfiltered', ['health'], ticks, []],
+  ['fractional number is F32', ['game_time'], [80], [{ prop: 'game_time', state: 1.5 }]],
+  ['i32 MIN', ['game_time'], [80], [{ prop: 'game_time', state: -2147483648 }]],
+  ['i32 MAX', ['game_time'], [80], [{ prop: 'game_time', state: 2147483647 }]],
+  ['negative zero', ['game_time'], [80], [{ prop: 'game_time', state: -0 }]],
+  ['zero bigint', ['game_time'], [80], [{ prop: 'game_time', state: 0n }]]
+]
+
+wasmTest('propStates edge states match native', async (t) => {
+  for (const [name, props, wantedTicks, propStates] of acceptedEdgeCases) {
+    await t.test(name, () => {
+      const expected = nativeTicks(props, wantedTicks, propStates)
+      const actual = plain(wasmTicks(props, wantedTicks, propStates))
+      assert.deepEqual(actual, expected)
+    })
+  }
+})
+
+const rejectionEdgeCases = [
+  [
+    'non-array object',
+    { prop: 'team_name', state: 'CT' },
+    /Failed to get Array length/,
+    'propStates must be an array of { prop, state } objects'
+  ],
+  [
+    'non-array string',
+    'team_name',
+    /Failed to get Array length/,
+    'propStates must be an array of { prop, state } objects'
+  ],
+  [
+    'non-object entry',
+    ['team_name'],
+    /Missing field `prop`/,
+    'propStates entries must be { prop, state } objects'
+  ],
+  [
+    'null entry',
+    [null],
+    /Cannot convert undefined or null to object/,
+    'propStates entries must be { prop, state } objects'
+  ],
+  [
+    'non-string prop',
+    [{ prop: 42, state: 'CT' }],
+    /Failed to convert JavaScript value/,
+    'propStates entries need a string `prop`'
+  ],
+  [
+    'null state',
+    [{ prop: 'team_name', state: null }],
+    /Unsupported type for Variant/,
+    'Expected a boolean, string, number, or bigint for a prop state'
+  ],
+  [
+    'undefined state',
+    [{ prop: 'team_name', state: undefined }],
+    /Missing field `state`/,
+    'Expected a boolean, string, number, or bigint for a prop state'
+  ]
+]
+
+wasmTest('propStates input-shape rejections match native', async (t) => {
+  for (const [name, propStates, nativePattern, wasmMessage] of rejectionEdgeCases) {
+    await t.test(name, () => {
+      assert.throws(() => nativeTicks(['team_name'], ticks, propStates), nativePattern)
+      assert.throws(() => wasmTicks(['team_name'], ticks, propStates), { message: wasmMessage })
+    })
+  }
+})
+
+wasmTest('parseTickRange propStates matches native parseTickRange', async (t) => {
   for (const [lo, hi] of [
     [80, 80],
     [100, 300]
   ]) {
-    const wantedTicks = []
-    for (let tick = lo; tick <= hi; tick += 1) wantedTicks.push(tick)
-
     for (const [prop, state] of [
       ['health', 100],
       ['game_time', 71n],
       ['team_name', 'CT']
     ]) {
       await t.test(`${lo}-${hi} ${prop}`, () => {
-        const expected = nativeTicks([prop], wantedTicks, [{ prop, state }])
+        const expected = nativeRange([prop], lo, hi, [{ prop, state }])
         const actual = plain(wasmRange([prop], lo, hi, [{ prop, state }]))
         assert.deepEqual(actual, expected)
       })
@@ -133,4 +285,71 @@ wasmTest('ChunkParser ticks mode propStates matches native', () => {
 
   const expected = nativeTicks(['health'], ticks, [{ prop: 'health', state: 100 }])
   assert.deepEqual(plain(rows), expected)
+})
+
+wasmTest('ChunkParser ticks mode keeps BigInt prop state semantics', () => {
+  const rows = []
+  const parser = new wasm.ChunkParser(bytes, 'ticks', [80], {
+    wantedProps: ['game_time'],
+    propStates: [{ prop: 'game_time', state: 71n }]
+  })
+
+  let chunk
+  while ((chunk = parser.nextChunk()) !== undefined) rows.push(...chunk)
+
+  const expected = nativeTicks(['game_time'], [80], [{ prop: 'game_time', state: 71n }])
+  assert.deepEqual(plain(rows), expected)
+})
+
+wasmTest('ChunkParser treats null, undefined, and empty propStates as unfiltered', () => {
+  const collect = (opts) => {
+    const rows = []
+    const parser = new wasm.ChunkParser(bytes, 'ticks', ticks, opts)
+    let chunk
+    while ((chunk = parser.nextChunk()) !== undefined) rows.push(...chunk)
+    return plain(rows)
+  }
+
+  const unfiltered = collect({ wantedProps: ['health'] })
+  assert.deepEqual(collect({ wantedProps: ['health'], propStates: null }), unfiltered)
+  assert.deepEqual(collect({ wantedProps: ['health'], propStates: undefined }), unfiltered)
+  assert.deepEqual(collect({ wantedProps: ['health'], propStates: [] }), unfiltered)
+})
+
+wasmTest('ChunkParser rejects propStates in grenades mode', () => {
+  assert.throws(
+    () =>
+      new wasm.ChunkParser(bytes, 'grenades', null, {
+        wantedProps: [],
+        propStates: []
+      }),
+    {
+      message:
+        'propStates is only supported in ticks mode; use parseGrenades for grenade state filtering'
+    }
+  )
+})
+
+wasmTest('non-string list arguments return JsError, not a trap', () => {
+  assert.throws(() => wasm.parseTicks(bytes, [42], [100], null, false, false, null), {
+    message: 'wantedProps entries must be strings'
+  })
+  assert.throws(() => wasm.parseTicks(bytes, ['health'], [100], [42], false, false, null), {
+    message: 'wantedPlayers entries must be strings'
+  })
+  assert.throws(() => wasm.parseTickRange(bytes, [42], 100, 100, null, false, null), {
+    message: 'wantedProps entries must be strings'
+  })
+  assert.throws(() => wasm.parseEvent(bytes, 'player_death', [42]), {
+    message: 'wantedPlayerProps entries must be strings'
+  })
+  assert.throws(() => wasm.parseEvents(bytes, [42]), {
+    message: 'eventNames entries must be strings'
+  })
+  assert.throws(() => wasm.parseGrenades(bytes, [42]), {
+    message: 'extra entries must be strings'
+  })
+  assert.throws(() => wasm.parseWeapons(bytes, [42]), {
+    message: 'extra entries must be strings'
+  })
 })

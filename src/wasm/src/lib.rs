@@ -10,6 +10,7 @@ use parser::second_pass::parser_settings::create_huffman_lookup_table;
 use parser::second_pass::variants::soa_to_aos;
 use parser::second_pass::variants::OutputSerdeHelperStruct;
 use parser::second_pass::variants::Variant;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -114,6 +115,18 @@ fn prop_state_variant(state: &JsValue) -> Result<Variant, JsError> {
     ))
 }
 
+fn wanted_strings(values: Option<Vec<JsValue>>, label: &str) -> Result<Vec<String>, JsError> {
+    values
+        .unwrap_or_default()
+        .into_iter()
+        .map(|value| {
+            value
+                .as_string()
+                .ok_or_else(|| JsError::new(&format!("{} entries must be strings", label)))
+        })
+        .collect()
+}
+
 #[wasm_bindgen]
 pub fn parseEvent(
     file: Vec<u8>,
@@ -121,14 +134,8 @@ pub fn parseEvent(
     wanted_player_props: Option<Vec<JsValue>>,
     wanted_other_props: Option<Vec<JsValue>>,
 ) -> Result<JsValue, JsError> {
-    let player_props = match wanted_player_props {
-        Some(p) => p.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>(),
-        None => vec![],
-    };
-    let other_props = match wanted_other_props {
-        Some(p) => p.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>(),
-        None => vec![],
-    };
+    let player_props = wanted_strings(wanted_player_props, "wantedPlayerProps")?;
+    let other_props = wanted_strings(wanted_other_props, "wantedOtherProps")?;
     let real_names_player = match rm_user_friendly_names(&player_props) {
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
@@ -186,18 +193,9 @@ pub fn parseEvents(
     wanted_player_props: Option<Vec<JsValue>>,
     wanted_other_props: Option<Vec<JsValue>>,
 ) -> Result<JsValue, JsError> {
-    let event_names = match event_names {
-        Some(p) => p.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>(),
-        None => vec![],
-    };
-    let player_props = match wanted_player_props {
-        Some(p) => p.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>(),
-        None => vec![],
-    };
-    let other_props = match wanted_other_props {
-        Some(p) => p.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>(),
-        None => vec![],
-    };
+    let event_names = wanted_strings(event_names, "eventNames")?;
+    let player_props = wanted_strings(wanted_player_props, "wantedPlayerProps")?;
+    let other_props = wanted_strings(wanted_other_props, "wantedOtherProps")?;
     let real_names_player = match rm_user_friendly_names(&player_props) {
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
@@ -331,19 +329,14 @@ pub fn parseTicks(
     wanted_ticks: Option<Vec<i32>>,
     wanted_players: Option<Vec<JsValue>>,
     struct_of_arrays: Option<bool>,
+    order_by_steamid: Option<bool>,
     prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
-    let wanted_props = match wanted_props {
-        Some(p) => p.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>(),
-        None => vec![],
-    };
-    let wanted_players_u64 = match wanted_players {
-        Some(v) => v
-            .iter()
-            .map(|x| x.as_string().unwrap().parse::<u64>().unwrap_or(0))
-            .collect(),
-        None => vec![],
-    };
+    let wanted_props = wanted_strings(wanted_props, "wantedProps")?;
+    let wanted_players_u64 = wanted_strings(wanted_players, "wantedPlayers")?
+        .iter()
+        .map(|x| x.parse::<u64>().unwrap_or(0))
+        .collect();
     let mut real_names = match rm_user_friendly_names(&wanted_props) {
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
@@ -361,6 +354,10 @@ pub fn parseTicks(
         Some(t) => t,
         None => vec![],
     };
+    let order_by_steamid = match order_by_steamid {
+        Some(true) => true,
+        _ => false,
+    };
     let settings = ParserInputs {
         wanted_players: wanted_players_u64,
         real_name_to_og_name: real_name_to_og_name.into(),
@@ -375,7 +372,7 @@ pub fn parseTicks(
         list_props: false,
         only_convars: false,
         huffman_lookup_table: &arc_huf.clone(),
-        order_by_steamid: false,
+        order_by_steamid: order_by_steamid,
         wanted_prop_states: wanted_prop_states.into_iter().collect(),
         fallback_bytes: None,
         parse_grenades: false,
@@ -391,6 +388,26 @@ pub fn parseTicks(
     };
     let mut prop_infos = output.prop_controller.prop_infos.clone();
     prop_infos.sort_by_key(|x| x.prop_name.clone());
+
+    if order_by_steamid {
+        let mut per_player: HashMap<String, OutputSerdeHelperStruct> = HashMap::default();
+        for (steamid, inner) in output.df_per_player {
+            per_player.insert(
+                steamid.to_string(),
+                OutputSerdeHelperStruct {
+                    prop_infos: prop_infos.clone(),
+                    inner: inner.into(),
+                },
+            );
+        }
+        let serializer = serde_wasm_bindgen::Serializer::new()
+            .serialize_maps_as_objects(true)
+            .serialize_missing_as_null(true);
+        return match per_player.serialize(&serializer) {
+            Ok(s) => Ok(s),
+            Err(e) => Err(JsError::new(&format!("{}", e))),
+        };
+    }
 
     let helper = OutputSerdeHelperStruct {
         prop_infos: prop_infos,
@@ -432,17 +449,11 @@ pub fn parseTickRange(
     struct_of_arrays: Option<bool>,
     prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
-    let wanted_props = match wanted_props {
-        Some(p) => p.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>(),
-        None => vec![],
-    };
-    let wanted_players_u64 = match wanted_players {
-        Some(v) => v
-            .iter()
-            .map(|x| x.as_string().unwrap().parse::<u64>().unwrap_or(0))
-            .collect(),
-        None => vec![],
-    };
+    let wanted_props = wanted_strings(wanted_props, "wantedProps")?;
+    let wanted_players_u64 = wanted_strings(wanted_players, "wantedPlayers")?
+        .iter()
+        .map(|x| x.parse::<u64>().unwrap_or(0))
+        .collect();
     let real_names = match rm_user_friendly_names(&wanted_props) {
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
@@ -534,17 +545,16 @@ pub fn parseGrenades(
     grenade_classes: Option<Vec<JsValue>>,
     skip_nones: Option<bool>,
 ) -> Result<JsValue, JsError> {
-    let mut extra = match extra {
-        Some(p) => p.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>(),
-        None => vec![],
-    };
+    let mut extra = wanted_strings(extra, "extra")?;
     let mut real_names = match rm_user_friendly_names(&extra) {
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     };
     let grenades = grenades.unwrap_or(true);
-    let grenade_classes = grenade_classes
-        .map(|classes| classes.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>());
+    let grenade_classes = match grenade_classes {
+        Some(classes) => Some(wanted_strings(Some(classes), "grenadeClasses")?),
+        None => None,
+    };
     let skip_nones = skip_nones.unwrap_or(false);
 
     let arc_huf = Arc::new(create_huffman_lookup_table());
@@ -603,10 +613,7 @@ pub fn parseGrenades(
 /// extra: fields of the weapon entity (e.g. m_nDropTick). ticks: restrict the output to these ticks.
 #[wasm_bindgen]
 pub fn parseWeapons(file: Vec<u8>, extra: Option<Vec<JsValue>>, ticks: Option<Vec<i32>>) -> Result<JsValue, JsError> {
-    let extra = match extra {
-        Some(p) => p.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>(),
-        None => vec![],
-    };
+    let extra = wanted_strings(extra, "extra")?;
     let real_names = match rm_user_friendly_names(&extra) {
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
@@ -685,7 +692,10 @@ pub fn parseHeader(file: Vec<u8>) -> Result<JsValue, JsError> {
         grenade_classes: None,
     };
     let mut parser = FirstPassParser::new(&settings);
-    let output = parser.parse_header_only(&file).unwrap();
+    let output = match parser.parse_header_only(&file) {
+        Ok(output) => output,
+        Err(e) => return Err(JsError::new(&format!("{}", e))),
+    };
     let mut hm: HashMap<String, String> = HashMap::default();
     hm.extend(output);
     match serde_wasm_bindgen::to_value(&hm) {
@@ -693,6 +703,27 @@ pub fn parseHeader(file: Vec<u8>) -> Result<JsValue, JsError> {
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     }
 }
+
+#[wasm_bindgen(typescript_custom_section)]
+const CHUNK_OPTS_TYPES: &'static str = r#"
+export interface ChunkOpts {
+    /** Ticks mode: player prop friendly names (e.g. X, Y, Z). Grenades mode: extra prop names. */
+    wantedProps: string[];
+    /** Ticks mode only: keep rows where every player matches every `{ prop, state }`. */
+    propStates?: ChunkPropState[];
+    /** Grenades mode only: non-projectile classes to emit (e.g. ["CInferno"]). */
+    grenadeClasses?: string[];
+    /** Grenades mode only: emit non-projectile grenades. Default true. */
+    nonProjectileGrenades?: boolean;
+    /** Grenades mode only: omit missing props instead of emitting nulls. Default false. */
+    skipNones?: boolean;
+}
+
+export interface ChunkPropState {
+    prop: string;
+    state: boolean | string | number | bigint;
+}
+"#;
 
 /// Options for `ChunkParser` (the `opts` constructor argument), deserialized
 /// from JS via `serde_wasm_bindgen::from_value`. Ticks mode also accepts
@@ -715,6 +746,12 @@ struct ChunkOpts {
     /// Default false, mirroring `parseGrenades`.
     #[serde(rename = "skipNones")]
     skip_nones: Option<bool>,
+    /// Ticks mode only: `{ prop, state }[]`, mirroring `parseTicks`.
+    /// Declared so the accepted shape lives on this struct; the constructor
+    /// reads it through `Reflect`, not serde, so BigInt states keep native
+    /// semantics. `null`/`undefined` mean no filter.
+    #[serde(rename = "propStates")]
+    prop_states: Option<serde::de::IgnoredAny>,
 }
 
 /// Bounded-memory streaming handle over one demo: the file is copied into
@@ -758,8 +795,8 @@ impl ChunkParser {
     /// `file`: whole demo bytes (copied once, shared by all chunks).
     /// `mode`: "ticks" or "grenades". `wanted_ticks`: ticks mode only, the
     /// exact wanted tick list (`None`/empty means all ticks); ignored for
-    /// grenades mode. `opts`: `{ wantedProps, propStates?, grenadeClasses?,
-    /// nonProjectileGrenades?, skipNones? }`; `propStates` is ticks mode only.
+    /// grenades mode. `opts`: `ChunkOpts` (see the generated declarations);
+    /// `propStates` is ticks mode only and is rejected in grenades mode.
     #[wasm_bindgen(constructor)]
     pub fn new(file: Vec<u8>, mode: String, wanted_ticks: Option<Vec<i32>>, opts: JsValue) -> Result<ChunkParser, JsError> {
         let opts_value = opts.clone();
@@ -772,14 +809,20 @@ impl ChunkParser {
             "grenades" => true,
             other => return Err(JsError::new(&format!("invalid mode {:?}: expected \"ticks\" or \"grenades\"", other))),
         };
+        let has_prop_states = opts.prop_states.is_some();
         let (wanted_prop_states, prop_state_names) = if is_grenades {
+            if has_prop_states {
+                return Err(JsError::new("propStates is only supported in ticks mode; use parseGrenades for grenade state filtering"));
+            }
             (vec![], vec![])
-        } else {
+        } else if has_prop_states {
             let prop_states = match js_sys::Reflect::get(&opts_value, &JsValue::from_str("propStates")) {
                 Ok(value) => value,
                 Err(e) => return Err(JsError::new(&format!("invalid opts: {:?}", e))),
             };
             wanted_prop_states_from_js(Some(prop_states))?
+        } else {
+            (vec![], vec![])
         };
         let real_names = match rm_user_friendly_names(&opts.wanted_props) {
             Ok(names) => names,

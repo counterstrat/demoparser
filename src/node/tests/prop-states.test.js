@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
-import { parseTicks } from '../index.js'
+import { parseTickRange, parseTicks } from '../index.js'
 
 const demo = fileURLToPath(new URL('../../parser/test_demo.dem', import.meta.url))
 const ticks = [50, 100, 200, 300, 400, 500]
@@ -11,6 +11,9 @@ const parse = (propStates) =>
 
 const parseFilter = (props, wantedTicks, propStates) =>
   parseTicks(demo, props, wantedTicks, null, false, false, propStates)
+
+const parseRange = (props, lo, hi, propStates) =>
+  parseTickRange(demo, props, lo, hi, null, false, propStates)
 
 test('duplicate prop state keys are rejected', () => {
   assert.throws(
@@ -84,4 +87,46 @@ test('string prop state filters rows', () => {
   const matching = parseFilter(['clan_name'], [100], [{ prop: 'clan_name', state: all[0].clan_name }])
   assert.deepEqual(matching, all)
   assert.equal(parseFilter(['clan_name'], [100], [{ prop: 'clan_name', state: 'no-such-clan' }]).length, 0)
+})
+
+test('null, undefined, and empty propStates mean no filter', () => {
+  const unfiltered = parseFilter(['health'], ticks, null)
+  assert.deepEqual(parseFilter(['health'], ticks, undefined), unfiltered)
+  assert.deepEqual(parseFilter(['health'], ticks, []), unfiltered)
+})
+
+test('edge prop state numbers keep native number typing', () => {
+  for (const state of [1.5, -2147483648, 2147483647, -0, 0n]) {
+    assert.doesNotThrow(() =>
+      parseFilter(['game_time'], [80], [{ prop: 'game_time', state }])
+    )
+  }
+})
+
+test('parseTickRange applies propStates like parseTicks', () => {
+  const lo = 100
+  const hi = 300
+  const wantedTicks = []
+  for (let tick = lo; tick <= hi; tick += 1) wantedTicks.push(tick)
+
+  for (const [prop, state] of [
+    ['health', 100],
+    ['game_time', 71n],
+    ['team_name', 'CT']
+  ]) {
+    const expected = parseFilter([prop], wantedTicks, [{ prop, state }])
+    const actual = parseRange([prop], lo, hi, [{ prop, state }])
+    assert.deepEqual(actual, expected)
+  }
+})
+
+test('parseTickRange rejects duplicate prop states', () => {
+  assert.throws(
+    () =>
+      parseRange(['team_name'], 100, 300, [
+        { prop: 'team_name', state: 'CT' },
+        { prop: 'team_name', state: 'TERRORIST' }
+      ]),
+    /Duplicate prop state/
+  )
 })
