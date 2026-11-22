@@ -358,14 +358,27 @@ pub fn listUpdatedFields(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
     }
 }
 
+/// Same argument order and semantics as native `parseTicks`; only the first
+/// argument differs (demo bytes vs path/`Buffer`). Parameters are snake_case:
+/// `parseTicks(file, wanted_props, wanted_ticks?, wanted_players?,
+/// struct_of_arrays?, order_by_steamid?, prop_states?)`.
+/// `order_by_steamid: true` groups rows per player; `struct_of_arrays: true`
+/// returns column arrays instead of rows (the ordered per-player result keeps
+/// the same grouping either way).
 #[wasm_bindgen]
 pub fn parseTicks(
     file: Vec<u8>,
+    #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_props: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "Int32Array | number[] | null | undefined")]
     wanted_ticks: Option<Vec<i32>>,
+    #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_players: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
     struct_of_arrays: Option<bool>,
+    #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
     order_by_steamid: Option<bool>,
+    #[wasm_bindgen(unchecked_optional_param_type = "ChunkPropState[] | null | undefined")]
     prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
     let wanted_props = wanted_strings_from_js(wanted_props, "wantedProps")?;
@@ -461,15 +474,23 @@ pub fn parseTicks(
 /// segments overlapping `[tick_lo, tick_hi]` are decoded and only rows in
 /// range are returned, so peak memory stays proportional to the slice —
 /// never the whole demo. Same row shape as `parseTicks`.
+/// `parseTickRange(file, wanted_props, tick_lo, tick_hi, wanted_players?,
+/// struct_of_arrays?, order_by_steamid?, prop_states?)` keeps the `parseTicks`
+/// argument order and semantics after the range.
 #[wasm_bindgen]
 pub fn parseTickRange(
     file: Vec<u8>,
+    #[wasm_bindgen(unchecked_param_type = "string[] | null | undefined")]
     wanted_props: Option<JsValue>,
     tick_lo: i32,
     tick_hi: i32,
+    #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_players: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
     struct_of_arrays: Option<bool>,
+    #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
     order_by_steamid: Option<bool>,
+    #[wasm_bindgen(unchecked_optional_param_type = "ChunkPropState[] | null | undefined")]
     prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
     let wanted_props = wanted_strings_from_js(wanted_props, "wantedProps")?;
@@ -812,13 +833,13 @@ struct ChunkOpts {
 /// continuous one-shot, so unfiltered row counts can differ from
 /// `parseGrenades` (every actual grenade class matches when filtered).
 ///
-/// Limits versus one-shot parsing: props that need continuous decode
-/// (stateful props such as `ducked`, velocity-derived props such as
-/// `velocity_X`) are rejected, as are `wantedPlayers` and
-/// `orderBySteamid: true`, because neither can be applied across chunk
-/// boundaries. `propStates` is supported in ticks mode; in grenades mode
-/// `null`/`undefined`/`[]` mean no filter and a non-empty filter is
-/// rejected.
+/// Limits versus one-shot parsing: `opts.wantedProps` is required, and props
+/// that need continuous decode (stateful props such as `ducked`,
+/// velocity-derived props such as `velocity_X`) are rejected, as are
+/// `wantedPlayers` and `orderBySteamid: true`, because neither can be applied
+/// across chunk boundaries. `propStates` is supported in ticks mode; in
+/// grenades mode `null`/`undefined`/`[]` mean no filter and a non-empty filter
+/// is rejected.
 ///
 /// One handle serves exactly one mode; the consumer creates one handle per
 /// pass, so one `Parser` + one preparse per handle is sufficient.

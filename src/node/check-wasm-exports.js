@@ -19,6 +19,14 @@
 // `parseTickRange` must also keep `order_by_steamid` between
 // `struct_of_arrays` and `prop_states` in both signatures and thread it into
 // `ParserInputs`, so the WASM argument order cannot drift from native.
+//
+// The array-typed tick parameters are guarded from both ends: `lib.rs` must
+// carry a wasm-bindgen `unchecked_param_type` (or
+// `unchecked_optional_param_type`) on `wanted_props`, `wanted_players`, and
+// `prop_states`, and the generated declarations must type those parameters as
+// `string[]` / `ChunkPropState[]` (nullable and optional where the runtime
+// accepts `null`/`undefined`) instead of `any`. That pins the editor surface
+// to the runtime checks in `lib.rs`.
 // Signatures and struct/function bodies are parsed structurally (balanced
 // parens/braces, comments and strings masked), so docs and substrings cannot
 // satisfy the guard.
@@ -295,6 +303,63 @@ const missingPropStateParams = propStateFunctions.filter((name) => {
   return rust === null || !/\bprop_states\s*:/.test(rust) || ts === null || !/\bprop_states\b/.test(ts)
 })
 
+const splitParams = (params) => {
+  const parts = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < params.length; i += 1) {
+    const char = params[i]
+    if ('([{<'.includes(char)) depth += 1
+    else if (')]}>'.includes(char)) depth -= 1
+    else if (char === ',' && depth === 0) {
+      parts.push(params.slice(start, i))
+      start = i + 1
+    }
+  }
+  parts.push(params.slice(start))
+  return parts.filter((part) => part.trim() !== '')
+}
+
+const paramEntry = (params, name) => {
+  if (params === null) return null
+  return (
+    splitParams(params).find((part) =>
+      new RegExp(`(?:^|[^A-Za-z0-9_])${name}\\s*\\??\\s*:`).test(part)
+    ) ?? null
+  )
+}
+
+const arrayTypedParams = {
+  wanted_props: 'string[]',
+  wanted_players: 'string[]',
+  prop_states: 'ChunkPropState[]'
+}
+
+const missingParamTypeAttrs = []
+const mismatchedTypedParams = []
+for (const name of propStateFunctions) {
+  for (const [param, expectedType] of Object.entries(arrayTypedParams)) {
+    const rustEntry = paramEntry(rustParameters(name), param)
+    if (
+      rustEntry === null ||
+      !/#\[wasm_bindgen\(\s*unchecked_(?:optional_)?param_type\s*=/.test(rustEntry)
+    ) {
+      missingParamTypeAttrs.push(`${name}.${param}`)
+    }
+
+    const tsEntry = paramEntry(tsParameters(name), param)
+    if (
+      tsEntry === null ||
+      !tsEntry.includes(expectedType) ||
+      !/\bnull\b/.test(tsEntry) ||
+      !/\bundefined\b/.test(tsEntry) ||
+      /:\s*any\b/.test(tsEntry)
+    ) {
+      mismatchedTypedParams.push(`${name}.${param} (want ${expectedType})`)
+    }
+  }
+}
+
 const functionBodyOf = (name) => {
   const match = new RegExp(`\\bfn\\s+${name}\\s*\\(`).exec(maskedLib)
   if (!match) return null
@@ -390,6 +455,16 @@ if (missingPropStateParams.length > 0) {
     `check-wasm-exports: propStates is not exposed on: ${missingPropStateParams.join(', ')}`
   )
 }
+if (missingParamTypeAttrs.length > 0) {
+  console.error(
+    `check-wasm-exports: lib.rs is missing unchecked_param_type on: ${missingParamTypeAttrs.join(', ')}`
+  )
+}
+if (mismatchedTypedParams.length > 0) {
+  console.error(
+    `check-wasm-exports: generated declarations do not type the tick parameters as arrays: ${mismatchedTypedParams.join(', ')}`
+  )
+}
 if (!orderOk) {
   console.error(
     'check-wasm-exports: parseTicks and parseTickRange must keep struct_of_arrays, order_by_steamid, prop_states in that order in lib.rs and the generated declarations, and thread order_by_steamid into ParserInputs'
@@ -413,6 +488,8 @@ if (
   missingFromAdapter.length > 0 ||
   extraInAdapter.length > 0 ||
   missingPropStateParams.length > 0 ||
+  missingParamTypeAttrs.length > 0 ||
+  mismatchedTypedParams.length > 0 ||
   !orderOk ||
   missingChunkPropStates ||
   !hasDefaultInit

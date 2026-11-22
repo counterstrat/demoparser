@@ -9,12 +9,12 @@ edition = "2018"
 crate-type = ["cdylib"]
 
 [dependencies]
-js-sys = "0.3.61"
+js-sys = "0.3.107"
 serde = { version = "1.0.160", features = ["derive"] }
 serde-wasm-bindgen = "0.5.0"
-wasm-bindgen = "0.2.84"
+wasm-bindgen = "0.2.130"
 itertools = "0.10.5"
-web-sys = { version = "0.3.61", features = ["console"] }
+web-sys = { version = "0.3.107", features = ["console"] }
 wasm-bindgen-file-reader = "1.0.0"
 getrandom = { version = "0.2", features = ["js"] }
 

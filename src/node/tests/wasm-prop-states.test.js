@@ -258,8 +258,20 @@ const rejectionEdgeCases = [
     'propStates must be an array of { prop, state } objects'
   ],
   [
+    'non-array number',
+    42,
+    /Failed to get Array length/,
+    'propStates must be an array of { prop, state } objects'
+  ],
+  [
     'non-object entry',
     ['team_name'],
+    /Missing field `prop`/,
+    'propStates entries must be { prop, state } objects'
+  ],
+  [
+    'number entry',
+    [42],
     /Missing field `prop`/,
     'propStates entries must be { prop, state } objects'
   ],
@@ -422,28 +434,152 @@ wasmTest('parseTickRange returns no rows when tick_lo exceeds tick_hi, like nati
 })
 
 wasmTest('non-array wantedProps and wantedPlayers are rejected like native', () => {
-  assert.throws(
-    () => native.parseTicks(demoPath, 'health', ticks, null, false, false, null),
-    /Array length/
-  )
-  assert.throws(() => wasm.parseTicks(bytes, 'health', ticks, null, false, false, null), {
-    message: 'wantedProps must be an array of strings'
-  })
-  assert.throws(
-    () => native.parseTickRange(demoPath, 'health', 100, 300, null, false, false, null),
-    /Array length/
-  )
-  assert.throws(() => wasm.parseTickRange(bytes, 'health', 100, 300, null, false, false, null), {
-    message: 'wantedProps must be an array of strings'
-  })
-  assert.throws(
-    () => native.parseTicks(demoPath, ['health'], [100], '76561198265366770', false, false, null),
-    /Array length/
-  )
-  assert.throws(
-    () => wasm.parseTicks(bytes, ['health'], [100], '76561198265366770', false, false, null),
-    { message: 'wantedPlayers must be an array of strings' }
-  )
+  for (const value of ['health', 42, {}]) {
+    assert.throws(
+      () => native.parseTicks(demoPath, value, ticks, null, false, false, null),
+      /Array length/
+    )
+    assert.throws(() => wasm.parseTicks(bytes, value, ticks, null, false, false, null), {
+      message: 'wantedProps must be an array of strings'
+    })
+    assert.throws(
+      () => native.parseTickRange(demoPath, value, 100, 300, null, false, false, null),
+      /Array length/
+    )
+    assert.throws(
+      () => wasm.parseTickRange(bytes, value, 100, 300, null, false, false, null),
+      { message: 'wantedProps must be an array of strings' }
+    )
+  }
+
+  for (const value of ['76561198265366770', 42, {}]) {
+    assert.throws(
+      () => native.parseTicks(demoPath, ['health'], [100], value, false, false, null),
+      /Array length/
+    )
+    assert.throws(() => wasm.parseTicks(bytes, ['health'], [100], value, false, false, null), {
+      message: 'wantedPlayers must be an array of strings'
+    })
+    assert.throws(
+      () => native.parseTickRange(demoPath, ['health'], 100, 300, value, false, false, null),
+      /Array length/
+    )
+    assert.throws(
+      () => wasm.parseTickRange(bytes, ['health'], 100, 300, value, false, false, null),
+      { message: 'wantedPlayers must be an array of strings' }
+    )
+  }
+})
+
+// The declarations type these parameters as arrays (nullable/optional), so the
+// runtime must accept `[]`, `null`, and `undefined` as "no filter" and reject
+// non-array values instead of iterating them. Native accepts nullish
+// wantedPlayers but requires an array for wantedProps, so compare against
+// native's empty-array result there.
+wasmTest('wantedProps accepts strings, empty, null, and undefined', async (t) => {
+  const expected = nativeTicks([], [100], null)
+  for (const [label, wantedProps] of [
+    ['strings', ['health']],
+    ['empty', []],
+    ['null', null],
+    ['undefined', undefined]
+  ]) {
+    await t.test(label, () => {
+      const expectedRows =
+        label === 'strings'
+          ? nativeTicks(['health'], [100], null)
+          : expected
+      assert.deepEqual(
+        plain(wasm.parseTicks(bytes, wantedProps, [100], null, false, false, null)),
+        expectedRows
+      )
+      assert.deepEqual(
+        plain(wasm.parseTickRange(bytes, wantedProps, 100, 100, null, false, false, null)),
+        label === 'strings'
+          ? nativeRange(['health'], 100, 100, null)
+          : nativeRange([], 100, 100, null)
+      )
+    })
+  }
+})
+
+wasmTest('wantedPlayers accepts numeric-string arrays, empty, null, and undefined', async (t) => {
+  const unfiltered = nativeTicks(['steamid'], [100], null)
+  const steamid = unfiltered[0].steamid
+
+  for (const [label, wantedPlayers] of [
+    ['numeric strings', [steamid, '0']],
+    ['empty', []],
+    ['null', null],
+    ['undefined', undefined]
+  ]) {
+    await t.test(label, () => {
+      const expected = native.parseTicks(demoPath, ['steamid'], [100], wantedPlayers, false, false, null)
+      const actual = plain(wasm.parseTicks(bytes, ['steamid'], [100], wantedPlayers, false, false, null))
+      assert.deepEqual(actual, expected)
+
+      const expectedRange = nativeRange(['steamid'], 100, 100, null)
+      const actualRange = plain(
+        wasm.parseTickRange(bytes, ['steamid'], 100, 100, wantedPlayers, false, false, null)
+      )
+      assert.deepEqual(
+        actualRange,
+        label === 'numeric strings'
+          ? native.parseTickRange(demoPath, ['steamid'], 100, 100, wantedPlayers, false, false, null)
+          : expectedRange
+      )
+
+      if (label === 'numeric strings') {
+        assert.ok(actual.length > 0)
+        assert.ok(actual.every((row) => row.steamid === steamid))
+      }
+    })
+  }
+})
+
+wasmTest('non-string wantedProps and wantedPlayers entries are rejected like native', async (t) => {
+  for (const [name, entry] of [
+    ['number', 42],
+    ['object', {}],
+    ['null', null]
+  ]) {
+    await t.test(`wantedProps ${name}`, () => {
+      assert.throws(
+        () => native.parseTicks(demoPath, [entry], [100], null, false, false, null),
+        /Failed to convert JavaScript value/
+      )
+      assert.throws(() => wasm.parseTicks(bytes, [entry], [100], null, false, false, null), {
+        message: 'wantedProps entries must be strings'
+      })
+      assert.throws(
+        () => native.parseTickRange(demoPath, [entry], 100, 100, null, false, false, null),
+        /Failed to convert JavaScript value/
+      )
+      assert.throws(
+        () => wasm.parseTickRange(bytes, [entry], 100, 100, null, false, false, null),
+        { message: 'wantedProps entries must be strings' }
+      )
+    })
+
+    await t.test(`wantedPlayers ${name}`, () => {
+      assert.throws(
+        () => native.parseTicks(demoPath, ['health'], [100], [entry], false, false, null),
+        /Failed to convert JavaScript value/
+      )
+      assert.throws(
+        () => wasm.parseTicks(bytes, ['health'], [100], [entry], false, false, null),
+        { message: 'wantedPlayers entries must be strings' }
+      )
+      assert.throws(
+        () => native.parseTickRange(demoPath, ['health'], 100, 100, [entry], false, false, null),
+        /Failed to convert JavaScript value/
+      )
+      assert.throws(
+        () => wasm.parseTickRange(bytes, ['health'], 100, 100, [entry], false, false, null),
+        { message: 'wantedPlayers entries must be strings' }
+      )
+    })
+  }
 })
 
 // Both bindings map unparsable wantedPlayers entries to 0 (`unwrap_or(0)`).
