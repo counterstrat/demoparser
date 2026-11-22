@@ -95,6 +95,21 @@ test('null, undefined, and empty propStates mean no filter', () => {
   assert.deepEqual(parseFilter(['health'], ticks, []), unfiltered)
 })
 
+test('null and undefined wantedProps mean no filter', () => {
+  const allTicks = parseTicks(demo, [], ticks, null, false, false, null)
+  assert.deepEqual(parseTicks(demo, null, ticks, null, false, false, null), allTicks)
+  assert.deepEqual(parseTicks(demo, undefined, ticks, null, false, false, null), allTicks)
+
+  const allRows = parseTickRange(demo, [], 100, 300, null, false, false, null)
+  assert.deepEqual(parseTickRange(demo, null, 100, 300, null, false, false, null), allRows)
+  assert.deepEqual(parseTickRange(demo, undefined, 100, 300, null, false, false, null), allRows)
+})
+
+test('non-array wantedProps are still rejected', () => {
+  assert.throws(() => parseTicks(demo, 'health', ticks, null, false, false, null), /Array length/)
+  assert.throws(() => parseTickRange(demo, {}, 100, 300, null, false, false, null), /Array length/)
+})
+
 test('edge prop state numbers keep native number typing', () => {
   for (const state of [1.5, -2147483648, 2147483647, -0, 0n]) {
     assert.doesNotThrow(() =>

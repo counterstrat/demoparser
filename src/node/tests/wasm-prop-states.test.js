@@ -71,6 +71,37 @@ if (wasmBuilt) {
   })
 }
 
+const wasmFileParamsAreUint8Array = [
+  'parseEvent(file: Uint8Array,',
+  'parseEvents(file: Uint8Array,',
+  'listGameEvents(fileBytes: Uint8Array)',
+  'listUpdatedFields(fileBytes: Uint8Array)',
+  'parseTicks(file: Uint8Array,',
+  'parseTickRange(file: Uint8Array,',
+  'parseGrenades(file: Uint8Array,',
+  'parseWeapons(file: Uint8Array,',
+  'parseHeader(file: Uint8Array)',
+  'constructor(file: Uint8Array, mode: string, wanted_ticks: number[] | null | undefined'
+].every((signature) => wasmTypesSource.includes(signature))
+
+const wasmTickParamsAreNumberArrays =
+  /wanted_ticks\?: number\[\] \| null \| undefined/.test(wasmTypesSource) &&
+  /ticks\?: number\[\] \| null \| undefined/.test(wasmTypesSource) &&
+  !/\bInt32Array\b/.test(wasmTypesSource)
+
+if (wasmBuilt) {
+  test('wasm declarations take Uint8Array files and number[] ticks', () => {
+    assert.ok(
+      wasmFileParamsAreUint8Array,
+      'wasm file parameters must be Uint8Array-only; run `npm run build:wasm`'
+    )
+    assert.ok(
+      wasmTickParamsAreNumberArrays,
+      'wasm tick parameters must be number[]-only; run `npm run build:wasm`'
+    )
+  })
+}
+
 const skipReason = wasmBuilt
   ? 'wasm build is stale or incomplete; run `npm run build:wasm`'
   : 'wasm build output is not built; run `npm run build:wasm`'
@@ -613,41 +644,38 @@ const fileGuardCases = [
   ['ChunkParser', (value) => new wasm.ChunkParser(value, 'ticks', [100], { wantedProps: ['health'] })]
 ]
 
-wasmTest('demo bytes reject non-byte inputs with JsError, not a trap', async (t) => {
+const bytesMessage = 'file must be a Uint8Array; pass a Uint8Array (Node Buffers are Uint8Arrays)'
+
+wasmTest('demo bytes reject non-Uint8Array inputs with JsError, not a trap', async (t) => {
   for (const [name, call] of fileGuardCases) {
     for (const [label, value] of [
       ['string', 'demo bytes'],
       ['object', {}],
       ['null', null],
-      ['undefined', undefined]
+      ['undefined', undefined],
+      ['number[]', [1, 2, 3]],
+      ['number[] with invalid byte', [256]],
+      ['Uint16Array', new Uint16Array([100])],
+      ['Int8Array', new Int8Array([100])],
+      ['ArrayBuffer', new ArrayBuffer(8)]
     ]) {
       await t.test(`${name} ${label}`, () => {
-        assert.throws(call.bind(null, value), {
-          message: 'file must be a Uint8Array or an array of bytes'
-        })
-      })
-    }
-
-    for (const [label, value] of [
-      ['byte above 255', [256]],
-      ['negative byte', [-1]],
-      ['fractional byte', [1.5]],
-      ['NaN byte', [NaN]],
-      ['Infinity byte', [Infinity]],
-      ['string entry', ['1']]
-    ]) {
-      await t.test(`${name} ${label}`, () => {
-        assert.throws(call.bind(null, value), {
-          message: 'file entries must be integers between 0 and 255'
-        })
+        assert.throws(call.bind(null, value), { message: bytesMessage })
       })
     }
   }
 })
 
-wasmTest('demo bytes accept Uint8Array, number[], and Node Buffer', () => {
+wasmTest('demo bytes reject number[] like native rejects non-Buffer input', () => {
+  assert.throws(
+    () => native.parseHeader([1, 2, 3]),
+    /Value is none of these types|Failed to convert JavaScript value/
+  )
+  assert.throws(() => wasm.parseHeader([1, 2, 3]), { message: bytesMessage })
+})
+
+wasmTest('demo bytes accept Uint8Array and Node Buffer', () => {
   const expected = plain(wasm.parseHeader(bytes))
-  assert.deepEqual(plain(wasm.parseHeader(Array.from(bytes))), expected)
   assert.deepEqual(plain(wasm.parseHeader(Buffer.from(bytes))), expected)
 })
 
@@ -706,13 +734,14 @@ wasmTest('non-array tick lists are rejected like native', async (t) => {
       ['Uint32Array', new Uint32Array([100])],
       ['Int8Array', new Int8Array([100])],
       ['Int16Array', new Int16Array([100])],
+      ['Int32Array', new Int32Array([100])],
       ['Float64Array', new Float64Array([100])],
       ['BigInt64Array', new BigInt64Array([100n])]
     ]) {
       await t.test(`${name} ${label}`, () => {
         assert.throws(() => callNative(value), /Array length/)
         assert.throws(() => callWasm(value), {
-          message: 'wantedTicks must be an Int32Array or an array of integers'
+          message: 'wantedTicks must be an array of integers'
         })
       })
     }
@@ -737,14 +766,14 @@ wasmTest('non-numeric tick entries are rejected like native', async (t) => {
   }
 })
 
-wasmTest('Int32Array ticks are accepted by WASM; native only takes number[]', () => {
-  const expected = nativeTicks(['health'], [100], null)
-  const actual = plain(wasm.parseTicks(bytes, ['health'], new Int32Array([100]), null, false, false, null))
-  assert.deepEqual(actual, expected)
-
+wasmTest('Int32Array ticks are rejected like native', () => {
   assert.throws(
     () => native.parseTicks(demoPath, ['health'], new Int32Array([100]), null, false, false, null),
     /Array length/
+  )
+  assert.throws(
+    () => wasm.parseTicks(bytes, ['health'], new Int32Array([100]), null, false, false, null),
+    { message: 'wantedTicks must be an array of integers' }
   )
 })
 
@@ -804,15 +833,18 @@ wasmTest('tick list and range conversions match native i32 semantics', async (t)
   )
 })
 
-wasmTest('Int32Array ticks are accepted by grenades and weapons too', () => {
-  assert.deepEqual(
-    plain(wasm.parseGrenades(bytes, null, false, new Int32Array([100]))),
-    native.parseGrenades(demoPath, null, false, [100])
+wasmTest('Int32Array ticks are rejected by grenades and weapons too', () => {
+  assert.throws(
+    () => native.parseGrenades(demoPath, null, false, new Int32Array([100])),
+    /Array length/
   )
-  assert.deepEqual(
-    plain(wasm.parseWeapons(bytes, null, new Int32Array([100]))),
-    native.parseWeapons(demoPath, null, [100])
-  )
+  assert.throws(() => wasm.parseGrenades(bytes, null, false, new Int32Array([100])), {
+    message: 'wantedTicks must be an array of integers'
+  })
+  assert.throws(() => native.parseWeapons(demoPath, null, new Int32Array([100])), /Array length/)
+  assert.throws(() => wasm.parseWeapons(bytes, null, new Int32Array([100])), {
+    message: 'wantedTicks must be an array of integers'
+  })
 })
 
 wasmTest('null, undefined, and empty tick lists mean all ticks', () => {
@@ -876,42 +908,31 @@ wasmTest('parseEvent and parseEvents accept gameEventListBytes like native', asy
     plain(wasm.parseEvent(bytes, 'player_death', null, null, fallback)),
     plain(wasm.parseEvent(bytes, 'player_death'))
   )
-  assert.deepEqual(
-    plain(wasm.parseEvent(bytes, 'player_death', null, null, Array.from(fallback))),
-    plain(wasm.parseEvent(bytes, 'player_death'))
-  )
 })
 
-wasmTest('gameEventListBytes rejects non-byte inputs', async (t) => {
+wasmTest('gameEventListBytes rejects non-Uint8Array inputs like native', async (t) => {
   for (const [label, value] of [
     ['string', 'bytes'],
-    ['object', {}]
+    ['object', {}],
+    ['number[]', [1, 2, 3]],
+    ['number[] with invalid byte', [256]]
   ]) {
     await t.test(label, () => {
+      assert.throws(() => native.parseEvent(demoPath, 'player_death', null, null, value), /Buffer|none of these types/)
       assert.throws(() => wasm.parseEvent(bytes, 'player_death', null, null, value), {
-        message: 'gameEventListBytes must be a Uint8Array or an array of bytes'
+        message: 'gameEventListBytes must be a Uint8Array; pass a Uint8Array (Node Buffers are Uint8Arrays)'
       })
       assert.throws(() => wasm.parseEvents(bytes, ['player_death'], null, null, value), {
-        message: 'gameEventListBytes must be a Uint8Array or an array of bytes'
+        message: 'gameEventListBytes must be a Uint8Array; pass a Uint8Array (Node Buffers are Uint8Arrays)'
       })
     })
   }
 
-  for (const [label, value] of [
-    ['above 255', [256]],
-    ['negative', [-1]],
-    ['fractional', [1.5]],
-    ['string entry', ['1']]
-  ]) {
-    await t.test(label, () => {
-      assert.throws(() => wasm.parseEvent(bytes, 'player_death', null, null, value), {
-        message: 'gameEventListBytes entries must be integers between 0 and 255'
-      })
-      assert.throws(() => wasm.parseEvents(bytes, ['player_death'], null, null, value), {
-        message: 'gameEventListBytes entries must be integers between 0 and 255'
-      })
-    })
-  }
+  // Native `Buffer` conversion also accepts other typed arrays; WASM stays
+  // `Uint8Array`-only.
+  assert.throws(() => wasm.parseEvent(bytes, 'player_death', null, null, new Uint16Array([1, 2, 3])), {
+    message: 'gameEventListBytes must be a Uint8Array; pass a Uint8Array (Node Buffers are Uint8Arrays)'
+  })
 })
 
 wasmTest('non-string event names and non-boolean flags are rejected like native', async (t) => {
@@ -989,8 +1010,7 @@ wasmTest('non-numeric range bounds are rejected like native', async (t) => {
 // non-array values instead of iterating them. Native accepts nullish
 // wantedPlayers but requires an array for wantedProps, so compare against
 // native's empty-array result there.
-wasmTest('wantedProps accepts strings, empty, null, and undefined', async (t) => {
-  const expected = nativeTicks([], [100], null)
+wasmTest('wantedProps accepts strings, empty, null, and undefined in both bindings', async (t) => {
   for (const [label, wantedProps] of [
     ['strings', ['health']],
     ['empty', []],
@@ -998,19 +1018,13 @@ wasmTest('wantedProps accepts strings, empty, null, and undefined', async (t) =>
     ['undefined', undefined]
   ]) {
     await t.test(label, () => {
-      const expectedRows =
-        label === 'strings'
-          ? nativeTicks(['health'], [100], null)
-          : expected
       assert.deepEqual(
         plain(wasm.parseTicks(bytes, wantedProps, [100], null, false, false, null)),
-        expectedRows
+        nativeTicks(wantedProps, [100], null)
       )
       assert.deepEqual(
         plain(wasm.parseTickRange(bytes, wantedProps, 100, 100, null, false, false, null)),
-        label === 'strings'
-          ? nativeRange(['health'], 100, 100, null)
-          : nativeRange([], 100, 100, null)
+        nativeRange(wantedProps, 100, 100, null)
       )
     })
   }
@@ -1248,8 +1262,8 @@ wasmTest('ChunkParser rejects non-empty propStates in grenades mode', () => {
 })
 
 wasmTest('ChunkParser grenades mode rejects non-empty wantedTicks', async (t) => {
-  for (const wantedTicks of [[100], new Int32Array([100]), [NaN]]) {
-    await t.test(Array.isArray(wantedTicks) ? 'array' : 'Int32Array', () => {
+  for (const wantedTicks of [[100], [NaN]]) {
+    await t.test('array', () => {
       assert.throws(
         () => new wasm.ChunkParser(bytes, 'grenades', wantedTicks, { wantedProps: [] }),
         { message: 'ChunkParser grenades mode does not support wantedTicks; use parseGrenades' }
@@ -1433,12 +1447,11 @@ wasmTest('ChunkParser rejects non-array grenadeClasses', () => {
   )
 })
 
-wasmTest('ChunkParser accepts Int32Array wantedTicks', () => {
-  const parser = new wasm.ChunkParser(bytes, 'ticks', new Int32Array([100]), {
-    wantedProps: ['health']
-  })
-  assert.ok(parser.chunkCount > 0)
-  parser.free()
+wasmTest('ChunkParser rejects Int32Array wantedTicks like native', () => {
+  assert.throws(
+    () => new wasm.ChunkParser(bytes, 'ticks', new Int32Array([100]), { wantedProps: ['health'] }),
+    { message: 'wantedTicks must be an array of integers' }
+  )
 })
 
 wasmTest('ChunkParser rejects non-array wanted ticks', () => {
@@ -1454,7 +1467,7 @@ wasmTest('ChunkParser rejects non-array wanted ticks', () => {
   ]) {
     assert.throws(
       () => new wasm.ChunkParser(bytes, 'ticks', value, { wantedProps: ['health'] }),
-      { message: 'wantedTicks must be an Int32Array or an array of integers' }
+      { message: 'wantedTicks must be an array of integers' }
     )
   }
   assert.throws(

@@ -24,15 +24,17 @@
 // carry a wasm-bindgen `unchecked_param_type` (or
 // `unchecked_optional_param_type`) on every string list and tick list, and the
 // generated declarations must type those parameters as `string[]`,
-// `WantedPropState[]`, or `Int32Array | number[]` (nullable and optional where
-// the runtime accepts `null`/`undefined`) instead of `any`. That pins the
-// editor surface to the runtime checks in `lib.rs` for `parseTicks`,
-// `parseTickRange`, `parseEvent`, `parseEvents`, `parseGrenades`, and
-// `parseWeapons`. `ChunkPropState` must stay an alias of `WantedPropState` so
-// the chunk API and the native binding describe one prop-state concept.
-// Demo-byte parameters must keep checked `Uint8Array | number[]` types (and
-// `parseEvent`/`parseEvents` their optional `gameEventListBytes`), and
-// `parseEvent.event_name` must stay required `string` to match native.
+// `WantedPropState[]`, or `number[]` (nullable and optional where the runtime
+// accepts `null`/`undefined`) instead of `any`. Tick lists must not accept
+// `Int32Array`, matching native's `number[]`. That pins the editor surface to
+// the runtime checks in `lib.rs` for `parseTicks`, `parseTickRange`,
+// `parseEvent`, `parseEvents`, `parseGrenades`, and `parseWeapons`.
+// `ChunkPropState` must stay an alias of `WantedPropState` so the chunk API and
+// the native binding describe one prop-state concept. Demo-byte parameters must
+// keep checked `Uint8Array`-only types (and `parseEvent`/`parseEvents` their
+// optional `gameEventListBytes`), so `number[]` is rejected like native's
+// non-`Buffer` input; `parseEvent.event_name` must stay required `string` to
+// match native.
 // Signatures and struct/function bodies are parsed structurally (balanced
 // parens/braces, comments and strings masked), so docs and substrings cannot
 // satisfy the guard.
@@ -299,6 +301,10 @@ const extraInAdapter = adapterApiNames.filter((name) => !wanted.includes(name))
 const hasDefaultInit = /export\s+default\s+wasm\.default/.test(wasmNodeSource)
 
 const rustParameters = (name) => paramsOf(maskedLib, new RegExp(`\\bfn\\s+${name}\\s*\\(`))
+// `maskedLib` blanks string literals, so attribute values are only readable
+// from the raw source. Signatures contain no parens inside comments or
+// strings, so balanced-paren extraction is safe here.
+const rawRustParameters = (name) => paramsOf(libSrc, new RegExp(`\\bfn\\s+${name}\\s*\\(`))
 const tsParameters = (name) =>
   paramsOf(maskedTypes, new RegExp(`\\bexport\\s+function\\s+${name}\\s*\\(`))
 
@@ -338,7 +344,7 @@ const paramEntry = (params, name) => {
 const arrayTypedParams = {
   parseTicks: {
     wanted_props: 'string[]',
-    wanted_ticks: 'Int32Array',
+    wanted_ticks: 'number[]',
     wanted_players: 'string[]',
     prop_states: 'WantedPropState[]'
   },
@@ -358,23 +364,30 @@ const arrayTypedParams = {
   },
   parseGrenades: {
     extra: 'string[]',
-    ticks: 'Int32Array',
+    ticks: 'number[]',
     grenade_classes: 'string[]'
   },
   parseWeapons: {
     extra: 'string[]',
-    ticks: 'Int32Array'
+    ticks: 'number[]'
   }
 }
+
+// Tick lists take `number[]` only; `Int32Array` must not reappear, matching
+// native's rejection of non-array tick input.
+const int32TypedParams = ['parseTicks.wanted_ticks', 'parseGrenades.ticks', 'parseWeapons.ticks']
 
 const missingParamTypeAttrs = []
 const mismatchedTypedParams = []
 for (const [name, params] of Object.entries(arrayTypedParams)) {
   for (const [param, expectedType] of Object.entries(params)) {
     const rustEntry = paramEntry(rustParameters(name), param)
+    const rawRustEntry = paramEntry(rawRustParameters(name), param)
     if (
       rustEntry === null ||
-      !/#\[wasm_bindgen\(\s*unchecked_(?:optional_)?param_type\s*=/.test(rustEntry)
+      !/#\[wasm_bindgen\(\s*unchecked_(?:optional_)?param_type\s*=/.test(rustEntry) ||
+      (int32TypedParams.includes(`${name}.${param}`) &&
+        (rawRustEntry === null || /\bInt32Array\b/.test(rawRustEntry)))
     ) {
       missingParamTypeAttrs.push(`${name}.${param}`)
     }
@@ -383,6 +396,7 @@ for (const [name, params] of Object.entries(arrayTypedParams)) {
     if (
       tsEntry === null ||
       !tsEntry.includes(expectedType) ||
+      (int32TypedParams.includes(`${name}.${param}`) && /\bInt32Array\b/.test(tsEntry)) ||
       !/\bnull\b/.test(tsEntry) ||
       !/\bundefined\b/.test(tsEntry) ||
       /:\s*any\b/.test(tsEntry)
@@ -415,9 +429,11 @@ const optionalBytesTypedParams = {
 const missingBytesParamTypes = []
 for (const [name, param] of Object.entries(bytesTypedParams)) {
   const rustEntry = paramEntry(rustParameters(name), param)
+  const rawRustEntry = paramEntry(rawRustParameters(name), param)
   if (
     rustEntry === null ||
-    !/#\[wasm_bindgen\(\s*unchecked_param_type\s*=/.test(rustEntry)
+    rawRustEntry === null ||
+    !/#\[wasm_bindgen\(\s*unchecked_param_type\s*=\s*"Uint8Array"\s*\)\]/.test(rawRustEntry)
   ) {
     missingBytesParamTypes.push(`${name}.${param}`)
   }
@@ -426,7 +442,7 @@ for (const [name, param] of Object.entries(bytesTypedParams)) {
   if (
     tsEntry === null ||
     !/Uint8Array/.test(tsEntry) ||
-    !/number\[\]/.test(tsEntry) ||
+    /number\[\]/.test(tsEntry) ||
     /\bnull\b/.test(tsEntry) ||
     /\bundefined\b/.test(tsEntry) ||
     /:\s*any\b/.test(tsEntry)
@@ -436,9 +452,13 @@ for (const [name, param] of Object.entries(bytesTypedParams)) {
 }
 for (const [name, param] of Object.entries(optionalBytesTypedParams)) {
   const rustEntry = paramEntry(rustParameters(name), param)
+  const rawRustEntry = paramEntry(rawRustParameters(name), param)
   if (
     rustEntry === null ||
-    !/#\[wasm_bindgen\(\s*unchecked_optional_param_type\s*=/.test(rustEntry)
+    rawRustEntry === null ||
+    !/#\[wasm_bindgen\(\s*unchecked_optional_param_type\s*=\s*"Uint8Array \| null \| undefined"\s*\)\]/.test(
+      rawRustEntry
+    )
   ) {
     missingBytesParamTypes.push(`${name}.${param}`)
   }
@@ -447,6 +467,7 @@ for (const [name, param] of Object.entries(optionalBytesTypedParams)) {
   if (
     tsEntry === null ||
     !/Uint8Array/.test(tsEntry) ||
+    /number\[\]/.test(tsEntry) ||
     !/\bnull\b/.test(tsEntry) ||
     !/\bundefined\b/.test(tsEntry) ||
     /:\s*any\b/.test(tsEntry)
@@ -592,7 +613,7 @@ if (mismatchedTypedParams.length > 0) {
 }
 if (missingBytesParamTypes.length > 0) {
   console.error(
-    `check-wasm-exports: demo bytes parameters are missing checked Uint8Array/number[] types: ${missingBytesParamTypes.join(', ')}`
+    `check-wasm-exports: demo bytes parameters are missing checked Uint8Array-only types: ${missingBytesParamTypes.join(', ')}`
   )
 }
 if (!eventNameRequired) {

@@ -37,8 +37,7 @@ await init();
 `parseTicks` and `parseTickRange` accept `{ prop, state }` objects in both the
 native and WASM bindings. `state` may be a boolean, string, finite number, or
 BigInt; integers above `u32::MAX` (4294967295) must be BigInt. A tick is kept
-only when every player matches every wanted state. `null` or an empty array
-means no filter.
+only when every player matches every wanted state.
 
 Same argument order in both bindings; only the first argument
 differs (path/Buffer vs bytes).
@@ -55,29 +54,11 @@ parseTicks(bytes, ['health'], null, null, false, false, [
 ])
 ```
 
-`ChunkParser` accepts the same filter through `opts.propStates` in ticks mode;
-grenades mode rejects a non-empty filter, a non-empty `wantedTicks` list, and
-ticks mode rejects grenade-only options (`grenadeClasses`,
-`nonProjectileGrenades`, `skipNones`).
-
-WASM also accepts `null`/`undefined` for `wantedProps` as "no filter" (the
-declarations type it nullable; native requires an array). `wantedTicks` takes
-`number[]` or `Int32Array`; other typed arrays are rejected rather than
-converted, because only `Int32Array` matches native's `i32` range. Ticks follow
-JS `ToInt32` semantics (NaN/Infinity become 0, fractions truncate, out-of-range
-values wrap modulo 2^32) in both bindings. Demo bytes must be a `Uint8Array`
-(including Node `Buffer`) or a `number[]` of integers 0-255; other values are
-rejected instead of coerced.
-
-`parseEvent` requires an `eventName` string, matching native. `parseEvent` and
-`parseEvents` also take optional `gameEventListBytes` for demos that do not
-embed an event list, mirroring the native argument.
-
-Both bindings map a non-numeric `wantedPlayers` entry to steamid `0` (silent filter, no throw), and an inverted tick range (`tickLo > tickHi`) returns `[]`.
-
-Native and WASM use different error text for malformed `propStates` (napi
-validates the object shape, WASM parses it by hand), but both reject the same
-inputs.
+- List filters accept `null`, `undefined`, or `[]` as "no filter" in both bindings.
+- WASM demo bytes must be a `Uint8Array`; a Node `Buffer` is one.
+- `wantedTicks` is `number[]`, with `ToInt32` semantics in both bindings.
+- `parseEvent` requires `eventName` and takes optional `gameEventListBytes`;
+  `ChunkParser` takes `propStates` in ticks mode only.
 
 ## Building from source
 

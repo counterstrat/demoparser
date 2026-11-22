@@ -135,23 +135,17 @@ fn wanted_strings_from_js(values: Option<JsValue>, label: &str) -> Result<Vec<St
         .collect()
 }
 
-/// Validates the raw tick list before conversion: only a real array or an
-/// `Int32Array` is accepted, so strings, objects, and other typed arrays cannot
-/// be silently coerced into ticks. `Int32Array` is the only accepted typed
-/// array because it shares native's `i32` range; accepting `Uint8Array` or
-/// `Uint32Array` would either narrow or overflow tick values without the
-/// per-entry checks native applies to `number[]`. Entries follow ECMAScript
+/// Validates the raw tick list before conversion: only a real array is
+/// accepted, matching native's `number[]`, so strings, objects, and typed
+/// arrays cannot be silently coerced into ticks. Entries follow ECMAScript
 /// `ToInt32` semantics (fractional values truncate, `NaN`/`Infinity` become 0,
 /// values wrap modulo 2^32), matching native's `Vec<i32>` conversion.
 fn wanted_ticks_from_js(values: Option<JsValue>) -> Result<Vec<i32>, JsError> {
     let Some(values) = values.filter(|value| !value.is_null() && !value.is_undefined()) else {
         return Ok(vec![]);
     };
-    let is_int32_array = values.is_instance_of::<js_sys::Int32Array>();
-    if !js_sys::Array::is_array(&values) && !is_int32_array {
-        return Err(JsError::new(
-            "wantedTicks must be an Int32Array or an array of integers",
-        ));
+    if !js_sys::Array::is_array(&values) {
+        return Err(JsError::new("wantedTicks must be an array of integers"));
     }
     js_sys::Array::from(&values)
         .iter()
@@ -186,25 +180,8 @@ fn required_bytes_from_js(value: JsValue, label: &str) -> Result<Vec<u8>, JsErro
     if value.is_instance_of::<js_sys::Uint8Array>() {
         return Ok(js_sys::Uint8Array::new(&value).to_vec());
     }
-    if js_sys::Array::is_array(&value) {
-        return js_sys::Array::from(&value)
-            .iter()
-            .map(|entry| {
-                let invalid =
-                    || JsError::new(&format!("{} entries must be integers between 0 and 255", label));
-                let number = entry.as_f64().ok_or_else(invalid)?;
-                if !number.is_finite()
-                    || number.fract() != 0.0
-                    || !(0.0..=255.0).contains(&number)
-                {
-                    return Err(invalid());
-                }
-                Ok(number as u8)
-            })
-            .collect();
-    }
     Err(JsError::new(&format!(
-        "{} must be a Uint8Array or an array of bytes",
+        "{} must be a Uint8Array; pass a Uint8Array (Node Buffers are Uint8Arrays)",
         label
     )))
 }
@@ -254,7 +231,7 @@ fn to_js_map_object<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
 
 #[wasm_bindgen]
 pub fn parseEvent(
-    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array")]
     file: JsValue,
     #[wasm_bindgen(unchecked_param_type = "string")]
     event_name: JsValue,
@@ -319,7 +296,7 @@ pub fn parseEvent(
 }
 #[wasm_bindgen]
 pub fn parseEvents(
-    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array")]
     file: JsValue,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     event_names: Option<JsValue>,
@@ -388,7 +365,7 @@ pub fn parseEvents(
 
 #[wasm_bindgen]
 pub fn listGameEvents(
-    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")] fileBytes: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array")] fileBytes: JsValue,
 ) -> Result<JsValue, JsError> {
     let file_bytes = required_bytes_from_js(fileBytes, "file")?;
     let arc_huf = Arc::new(create_huffman_lookup_table());
@@ -425,7 +402,7 @@ pub fn listGameEvents(
 }
 #[wasm_bindgen]
 pub fn listUpdatedFields(
-    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")] fileBytes: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array")] fileBytes: JsValue,
 ) -> Result<JsValue, JsError> {
     let file_bytes = required_bytes_from_js(fileBytes, "file")?;
     let arc_huf = Arc::new(create_huffman_lookup_table());
@@ -469,19 +446,18 @@ pub fn listUpdatedFields(
 /// returns column arrays instead of rows (the ordered per-player result keeps
 /// the same grouping either way).
 ///
-/// `file` must be a `Uint8Array`, a `number[]` of bytes, or a Node `Buffer`
-/// (a `Uint8Array` subclass); other values are rejected instead of coerced.
-/// `wanted_props` is declared optional/nullable here and `null`/`undefined`
-/// mean no prop filter; native requires an array, so that is a deliberate
-/// WASM-only convenience. `wanted_ticks` accepts `number[]` or `Int32Array`
-/// only; entries use native's `i32` conversion semantics.
+/// `file` must be a `Uint8Array` (including a Node `Buffer`, which is a
+/// `Uint8Array`); other values, including `number[]`, are rejected instead of
+/// coerced. List parameters accept `null`/`undefined` as "no filter", matching
+/// native. `wanted_ticks` accepts `number[]` only; entries use native's `i32`
+/// conversion semantics.
 #[wasm_bindgen]
 pub fn parseTicks(
-    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array")]
     file: JsValue,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_props: Option<JsValue>,
-    #[wasm_bindgen(unchecked_optional_param_type = "Int32Array | number[] | null | undefined")]
+    #[wasm_bindgen(unchecked_optional_param_type = "number[] | null | undefined")]
     wanted_ticks: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_players: Option<JsValue>,
@@ -592,11 +568,10 @@ pub fn parseTicks(
 /// `wanted_props` is required-but-nullable in the declarations (wasm-bindgen
 /// forbids an optional parameter before required `tick_lo`/`tick_hi`);
 /// `null`/`undefined` still mean no prop filter at runtime, same as
-/// `parseTicks`. `file` accepts a `Uint8Array`, a `number[]` of bytes, or a
-/// Node `Buffer`.
+/// `parseTicks`. `file` must be a `Uint8Array`, including a Node `Buffer`.
 #[wasm_bindgen]
 pub fn parseTickRange(
-    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array")]
     file: JsValue,
     // wasm-bindgen forbids an optional parameter before required `tick_lo`/
     // `tick_hi`, so this stays required-but-nullable in the declarations. The
@@ -721,13 +696,13 @@ pub fn parseTickRange(
 /// every row. Defaults to false to preserve legacy null behavior.
 #[wasm_bindgen]
 pub fn parseGrenades(
-    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array")]
     file: JsValue,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     extra: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
     grenades: Option<JsValue>,
-    #[wasm_bindgen(unchecked_optional_param_type = "Int32Array | number[] | null | undefined")]
+    #[wasm_bindgen(unchecked_optional_param_type = "number[] | null | undefined")]
     ticks: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     grenade_classes: Option<JsValue>,
@@ -800,11 +775,11 @@ pub fn parseGrenades(
 /// extra: fields of the weapon entity (e.g. m_nDropTick). ticks: restrict the output to these ticks.
 #[wasm_bindgen]
 pub fn parseWeapons(
-    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array")]
     file: JsValue,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     extra: Option<JsValue>,
-    #[wasm_bindgen(unchecked_optional_param_type = "Int32Array | number[] | null | undefined")]
+    #[wasm_bindgen(unchecked_optional_param_type = "number[] | null | undefined")]
     ticks: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
     let file = required_bytes_from_js(file, "file")?;
@@ -859,7 +834,7 @@ pub fn parseWeapons(
 
 #[wasm_bindgen]
 pub fn parseHeader(
-    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")] file: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array")] file: JsValue,
 ) -> Result<JsValue, JsError> {
     let file = required_bytes_from_js(file, "file")?;
     let arc_huf = Arc::new(create_huffman_lookup_table());
@@ -1079,7 +1054,7 @@ struct ChunkParserInner {
 #[wasm_bindgen]
 impl ChunkParser {
     /// `file`: whole demo bytes (copied once, shared by all chunks), as a
-    /// `Uint8Array`, `number[]` of bytes, or Node `Buffer`.
+    /// `Uint8Array`, including a Node `Buffer`.
     /// `mode`: "ticks" or "grenades". `wanted_ticks`: ticks mode only, the
     /// exact wanted tick list (`None`/empty means all ticks); grenades mode
     /// rejects a non-empty list. `opts`: `ChunkOpts` (see the generated
@@ -1091,11 +1066,11 @@ impl ChunkParser {
     /// options are rejected in ticks mode.
     #[wasm_bindgen(constructor)]
     pub fn new(
-        #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array")]
         file: JsValue,
         #[wasm_bindgen(unchecked_param_type = "string")]
         mode: JsValue,
-        #[wasm_bindgen(unchecked_param_type = "Int32Array | number[] | null | undefined")]
+        #[wasm_bindgen(unchecked_param_type = "number[] | null | undefined")]
         wanted_ticks: Option<JsValue>,
         opts: JsValue,
     ) -> Result<ChunkParser, JsError> {

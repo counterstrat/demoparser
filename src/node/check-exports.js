@@ -11,6 +11,11 @@
 // keep `structOfArrays`, `orderBySteamid`, `propStates` in that order for both
 // `parseTicks` and `parseTickRange`, matching the WASM signatures.
 //
+// List filters are optional in both bindings: this guard requires the native
+// declarations for `wantedProps`/`extra`/`playerExtra`/`otherExtra`/
+// `eventNames`/`grenadeClasses` to stay `Array<string>` and nullable
+// (`null`/`undefined` mean "no filter"), mirroring the WASM types.
+//
 // Run: `node check-exports.js` (from `src/node/`). Exit non-zero lists the
 // missing names per file or binary.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -131,6 +136,36 @@ for (const name of orderedFunctions) {
 if (missingTypes.length > 0) {
   console.error(
     `check-exports: tick declarations have wrong or missing types: ${missingTypes.join(', ')}`
+  )
+  process.exit(1)
+}
+
+const nullableListParams = {
+  parseTicks: ['wantedProps'],
+  parseTickRange: ['wantedProps'],
+  parseEvent: ['playerExtra', 'otherExtra'],
+  parseEvents: ['eventNames', 'playerExtra', 'otherExtra'],
+  parseGrenades: ['extra', 'grenadeClasses'],
+  parseWeapons: ['extra']
+}
+const badListTypes = []
+for (const [name, params] of Object.entries(nullableListParams)) {
+  const declaration = paramsOf(typesSource, name)
+  for (const param of params) {
+    const type = paramType(declaration, param)
+    if (
+      type === null ||
+      !/^Array\s*<\s*string\s*>/.test(type) ||
+      !/\bnull\b/.test(type) ||
+      !/\bundefined\b/.test(type)
+    ) {
+      badListTypes.push(`${name}.${param} (${type ?? 'missing'})`)
+    }
+  }
+}
+if (badListTypes.length > 0) {
+  console.error(
+    `check-exports: list filter declarations must be nullable Array<string>: ${badListTypes.join(', ')}`
   )
   process.exit(1)
 }

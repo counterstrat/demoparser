@@ -597,13 +597,14 @@ fn resolve_prop_states(
 #[napi]
 pub fn parse_ticks(
   path_or_buf: Either<String, Buffer>,
-  wanted_props: Vec<String>,
+  wanted_props: Option<Vec<String>>,
   wanted_ticks: Option<Vec<i32>>,
   wanted_players: Option<Vec<String>>,
   struct_of_arrays: Option<bool>,
   order_by_steamid: Option<bool>,
   prop_states: Option<Vec<WantedPropState>>,
 ) -> napi::Result<Value> {
+  let wanted_props = wanted_props.unwrap_or_default();
   let real_names = match rm_user_friendly_names(&wanted_props) {
     Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
@@ -710,7 +711,7 @@ pub fn parse_ticks(
 #[napi]
 pub fn parse_tick_range(
   path_or_buf: Either<String, Buffer>,
-  wanted_props: Vec<String>,
+  wanted_props: Option<Vec<String>>,
   tick_lo: i32,
   tick_hi: i32,
   wanted_players: Option<Vec<String>>,
@@ -718,6 +719,7 @@ pub fn parse_tick_range(
   order_by_steamid: Option<bool>,
   prop_states: Option<Vec<WantedPropState>>,
 ) -> napi::Result<Value> {
+  let wanted_props = wanted_props.unwrap_or_default();
   let real_names = match rm_user_friendly_names(&wanted_props) {
     Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
