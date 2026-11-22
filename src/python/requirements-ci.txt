@@ -1,7 +1,6 @@
 maturin==1.16.0
 patchelf==0.19.3.0
 mypy==2.4.1
-numpy==2.5.5
 pandas==3.1.1
 pandas-stubs==3.1.0.261029
 pyarrow==26.0.1
