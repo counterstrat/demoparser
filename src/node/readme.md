@@ -56,7 +56,22 @@ parseTicks(bytes, ['health'], null, null, false, false, [
 ```
 
 `ChunkParser` accepts the same filter through `opts.propStates` in ticks mode;
-grenades mode rejects a non-empty filter.
+grenades mode rejects a non-empty filter, a non-empty `wantedTicks` list, and
+ticks mode rejects grenade-only options (`grenadeClasses`,
+`nonProjectileGrenades`, `skipNones`).
+
+WASM also accepts `null`/`undefined` for `wantedProps` as "no filter" (the
+declarations type it nullable; native requires an array). `wantedTicks` takes
+`number[]` or `Int32Array`; other typed arrays are rejected rather than
+converted, because only `Int32Array` matches native's `i32` range. Ticks follow
+JS `ToInt32` semantics (NaN/Infinity become 0, fractions truncate, out-of-range
+values wrap modulo 2^32) in both bindings. Demo bytes must be a `Uint8Array`
+(including Node `Buffer`) or a `number[]` of integers 0-255; other values are
+rejected instead of coerced.
+
+`parseEvent` requires an `eventName` string, matching native. `parseEvent` and
+`parseEvents` also take optional `gameEventListBytes` for demos that do not
+embed an event list, mirroring the native argument.
 
 Both bindings map a non-numeric `wantedPlayers` entry to steamid `0` (silent filter, no throw), and an inverted tick range (`tickLo > tickHi`) returns `[]`.
 

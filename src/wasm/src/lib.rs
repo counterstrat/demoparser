@@ -137,9 +137,12 @@ fn wanted_strings_from_js(values: Option<JsValue>, label: &str) -> Result<Vec<St
 
 /// Validates the raw tick list before conversion: only a real array or an
 /// `Int32Array` is accepted, so strings, objects, and other typed arrays cannot
-/// be silently coerced into ticks. Entries follow ECMAScript `ToInt32`
-/// semantics (fractional values truncate, `NaN`/`Infinity` become 0), matching
-/// native's `Vec<i32>` conversion.
+/// be silently coerced into ticks. `Int32Array` is the only accepted typed
+/// array because it shares native's `i32` range; accepting `Uint8Array` or
+/// `Uint32Array` would either narrow or overflow tick values without the
+/// per-entry checks native applies to `number[]`. Entries follow ECMAScript
+/// `ToInt32` semantics (fractional values truncate, `NaN`/`Infinity` become 0,
+/// values wrap modulo 2^32), matching native's `Vec<i32>` conversion.
 fn wanted_ticks_from_js(values: Option<JsValue>) -> Result<Vec<i32>, JsError> {
     let Some(values) = values.filter(|value| !value.is_null() && !value.is_undefined()) else {
         return Ok(vec![]);
@@ -173,14 +176,47 @@ fn to_int32(value: f64) -> i32 {
     }
 }
 
-fn optional_string_from_js(value: Option<JsValue>, label: &str) -> Result<Option<String>, JsError> {
-    let Some(value) = value.filter(|value| !value.is_null() && !value.is_undefined()) else {
-        return Ok(None);
-    };
+fn required_string_from_js(value: JsValue, label: &str) -> Result<String, JsError> {
     value
         .as_string()
-        .map(Some)
         .ok_or_else(|| JsError::new(&format!("{} must be a string", label)))
+}
+
+fn required_bytes_from_js(value: JsValue, label: &str) -> Result<Vec<u8>, JsError> {
+    if value.is_instance_of::<js_sys::Uint8Array>() {
+        return Ok(js_sys::Uint8Array::new(&value).to_vec());
+    }
+    if js_sys::Array::is_array(&value) {
+        return js_sys::Array::from(&value)
+            .iter()
+            .map(|entry| {
+                let invalid =
+                    || JsError::new(&format!("{} entries must be integers between 0 and 255", label));
+                let number = entry.as_f64().ok_or_else(invalid)?;
+                if !number.is_finite()
+                    || number.fract() != 0.0
+                    || !(0.0..=255.0).contains(&number)
+                {
+                    return Err(invalid());
+                }
+                Ok(number as u8)
+            })
+            .collect();
+    }
+    Err(JsError::new(&format!(
+        "{} must be a Uint8Array or an array of bytes",
+        label
+    )))
+}
+
+fn optional_bytes_from_js(
+    value: Option<JsValue>,
+    label: &str,
+) -> Result<Option<Vec<u8>>, JsError> {
+    match value.filter(|value| !value.is_null() && !value.is_undefined()) {
+        Some(value) => Ok(Some(required_bytes_from_js(value, label)?)),
+        None => Ok(None),
+    }
 }
 
 fn required_i32_from_js(value: JsValue, label: &str) -> Result<i32, JsError> {
@@ -218,15 +254,19 @@ fn to_js_map_object<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
 
 #[wasm_bindgen]
 pub fn parseEvent(
-    file: Vec<u8>,
-    #[wasm_bindgen(unchecked_optional_param_type = "string | null | undefined")]
-    event_name: Option<JsValue>,
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+    file: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "string")]
+    event_name: JsValue,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_player_props: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_other_props: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "Uint8Array | null | undefined")]
+    game_event_list_bytes: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
-    let event_name = optional_string_from_js(event_name, "eventName")?;
+    let file = required_bytes_from_js(file, "file")?;
+    let event_name = required_string_from_js(event_name, "eventName")?;
     let player_props = wanted_strings_from_js(wanted_player_props, "wantedPlayerProps")?;
     let other_props = wanted_strings_from_js(wanted_other_props, "wantedOtherProps")?;
     let real_names_player = match rm_user_friendly_names(&player_props) {
@@ -245,13 +285,14 @@ pub fn parseEvent(
     for (real_name, user_friendly_name) in real_other_props.iter().zip(&other_props) {
         real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
     }
+    let fallback_bytes = optional_bytes_from_js(game_event_list_bytes, "gameEventListBytes")?;
     let arc_huf = Arc::new(create_huffman_lookup_table());
     let settings = ParserInputs {
         wanted_players: vec![],
         wanted_player_props: real_names_player,
         wanted_other_props: real_other_props,
         real_name_to_og_name: real_name_to_og_name.into(),
-        wanted_events: vec![event_name.unwrap_or("none".to_string())],
+        wanted_events: vec![event_name],
         collect_ticks: false,
         parse_voice: false,
         parse_ents: true,
@@ -262,7 +303,7 @@ pub fn parseEvent(
         huffman_lookup_table: &arc_huf,
         order_by_steamid: false,
         wanted_prop_states: HashMap::default().into(),
-        fallback_bytes: None,
+        fallback_bytes,
         parse_grenades: false,
         parse_weapons: false,
         vector_props_as_lists: false,
@@ -274,21 +315,22 @@ pub fn parseEvent(
         Ok(output) => output,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     };
-    match serde_wasm_bindgen::to_value(&output.game_events) {
-        Ok(s) => Ok(s),
-        Err(e) => return Err(JsError::new(&format!("{}", e))),
-    }
+    to_js_value(&output.game_events)
 }
 #[wasm_bindgen]
 pub fn parseEvents(
-    file: Vec<u8>,
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+    file: JsValue,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     event_names: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_player_props: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_other_props: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "Uint8Array | null | undefined")]
+    game_event_list_bytes: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
+    let file = required_bytes_from_js(file, "file")?;
     let event_names = match event_names.filter(|value| !value.is_null() && !value.is_undefined()) {
         Some(value) => wanted_strings_from_js(Some(value), "eventNames")?,
         None => return Err(JsError::new("No events provided!")),
@@ -311,6 +353,7 @@ pub fn parseEvents(
     for (real_name, user_friendly_name) in real_other_props.iter().zip(&other_props) {
         real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
     }
+    let fallback_bytes = optional_bytes_from_js(game_event_list_bytes, "gameEventListBytes")?;
     let arc_huf = Arc::new(create_huffman_lookup_table());
     let settings = ParserInputs {
         wanted_players: vec![],
@@ -328,7 +371,7 @@ pub fn parseEvents(
         huffman_lookup_table: &arc_huf,
         order_by_steamid: false,
         wanted_prop_states: HashMap::default().into(),
-        fallback_bytes: None,
+        fallback_bytes,
         parse_grenades: false,
         parse_weapons: false,
         vector_props_as_lists: false,
@@ -340,14 +383,14 @@ pub fn parseEvents(
         Ok(output) => output,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     };
-    match serde_wasm_bindgen::to_value(&output.game_events) {
-        Ok(s) => Ok(s),
-        Err(e) => return Err(JsError::new(&format!("{}", e))),
-    }
+    to_js_value(&output.game_events)
 }
 
 #[wasm_bindgen]
-pub fn listGameEvents(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
+pub fn listGameEvents(
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")] fileBytes: JsValue,
+) -> Result<JsValue, JsError> {
+    let file_bytes = required_bytes_from_js(fileBytes, "file")?;
     let arc_huf = Arc::new(create_huffman_lookup_table());
     let settings = ParserInputs {
         wanted_players: vec![],
@@ -373,18 +416,18 @@ pub fn listGameEvents(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
     };
     let mut parser = Parser::new(settings, ForceSingleThreaded);
 
-    let output = match parser.parse_demo(&fileBytes) {
+    let output = match parser.parse_demo(&file_bytes) {
         Ok(output) => output,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     };
     let v = Vec::from_iter(output.game_events_counter.iter());
-    match serde_wasm_bindgen::to_value(&v) {
-        Ok(s) => Ok(s),
-        Err(e) => return Err(JsError::new(&format!("{}", e))),
-    }
+    to_js_value(&v)
 }
 #[wasm_bindgen]
-pub fn listUpdatedFields(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
+pub fn listUpdatedFields(
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")] fileBytes: JsValue,
+) -> Result<JsValue, JsError> {
+    let file_bytes = required_bytes_from_js(fileBytes, "file")?;
     let arc_huf = Arc::new(create_huffman_lookup_table());
     let settings = ParserInputs {
         wanted_players: vec![],
@@ -410,15 +453,12 @@ pub fn listUpdatedFields(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
     };
     let mut parser = Parser::new(settings, ForceSingleThreaded);
 
-    let output = match parser.parse_demo(&fileBytes) {
+    let output = match parser.parse_demo(&file_bytes) {
         Ok(output) => output,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     };
     let v = Vec::from_iter(output.uniq_prop_names.iter());
-    match serde_wasm_bindgen::to_value(&v) {
-        Ok(s) => Ok(s),
-        Err(e) => return Err(JsError::new(&format!("{}", e))),
-    }
+    to_js_value(&v)
 }
 
 /// Same argument order and semantics as native `parseTicks`; only the first
@@ -428,9 +468,17 @@ pub fn listUpdatedFields(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
 /// `order_by_steamid: true` groups rows per player; `struct_of_arrays: true`
 /// returns column arrays instead of rows (the ordered per-player result keeps
 /// the same grouping either way).
+///
+/// `file` must be a `Uint8Array`, a `number[]` of bytes, or a Node `Buffer`
+/// (a `Uint8Array` subclass); other values are rejected instead of coerced.
+/// `wanted_props` is declared optional/nullable here and `null`/`undefined`
+/// mean no prop filter; native requires an array, so that is a deliberate
+/// WASM-only convenience. `wanted_ticks` accepts `number[]` or `Int32Array`
+/// only; entries use native's `i32` conversion semantics.
 #[wasm_bindgen]
 pub fn parseTicks(
-    file: Vec<u8>,
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+    file: JsValue,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_props: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "Int32Array | number[] | null | undefined")]
@@ -444,6 +492,7 @@ pub fn parseTicks(
     #[wasm_bindgen(unchecked_optional_param_type = "WantedPropState[] | null | undefined")]
     prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
+    let file = required_bytes_from_js(file, "file")?;
     let wanted_props = wanted_strings_from_js(wanted_props, "wantedProps")?;
     let wanted_players_u64 = wanted_strings_from_js(wanted_players, "wantedPlayers")?
         .iter()
@@ -539,9 +588,16 @@ pub fn parseTicks(
 /// `parseTickRange(file, wanted_props, tick_lo, tick_hi, wanted_players?,
 /// struct_of_arrays?, order_by_steamid?, prop_states?)` keeps the `parseTicks`
 /// argument order and semantics after the range.
+///
+/// `wanted_props` is required-but-nullable in the declarations (wasm-bindgen
+/// forbids an optional parameter before required `tick_lo`/`tick_hi`);
+/// `null`/`undefined` still mean no prop filter at runtime, same as
+/// `parseTicks`. `file` accepts a `Uint8Array`, a `number[]` of bytes, or a
+/// Node `Buffer`.
 #[wasm_bindgen]
 pub fn parseTickRange(
-    file: Vec<u8>,
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+    file: JsValue,
     // wasm-bindgen forbids an optional parameter before required `tick_lo`/
     // `tick_hi`, so this stays required-but-nullable in the declarations. The
     // runtime still treats `null`/`undefined` as no prop filter, same as
@@ -561,6 +617,7 @@ pub fn parseTickRange(
     #[wasm_bindgen(unchecked_optional_param_type = "WantedPropState[] | null | undefined")]
     prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
+    let file = required_bytes_from_js(file, "file")?;
     let wanted_props = wanted_strings_from_js(wanted_props, "wantedProps")?;
     let tick_lo = required_i32_from_js(tick_lo, "tickLo")?;
     let tick_hi = required_i32_from_js(tick_hi, "tickHi")?;
@@ -664,7 +721,8 @@ pub fn parseTickRange(
 /// every row. Defaults to false to preserve legacy null behavior.
 #[wasm_bindgen]
 pub fn parseGrenades(
-    file: Vec<u8>,
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+    file: JsValue,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     extra: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
@@ -676,8 +734,9 @@ pub fn parseGrenades(
     #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
     skip_nones: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
-    let mut extra = wanted_strings_from_js(extra, "extra")?;
-    let mut real_names = match rm_user_friendly_names(&extra) {
+    let file = required_bytes_from_js(file, "file")?;
+    let extra = wanted_strings_from_js(extra, "extra")?;
+    let real_names = match rm_user_friendly_names(&extra) {
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     };
@@ -733,11 +792,7 @@ pub fn parseGrenades(
     // rather than emitted as nulls: with wide extras, explicit nulls would
     // multiply every row. Defaults to false to preserve legacy null behavior.
     let result = soa_to_aos(helper, skip_nones);
-    let s = match serde_wasm_bindgen::to_value(&result) {
-        Ok(s) => s,
-        Err(e) => return Err(JsError::new(&format!("{}", e))),
-    };
-    Ok(s)
+    to_js_value(&result)
 }
 
 /// Weapons lying on the ground (no owner): dropped on death, thrown with the drop key or
@@ -745,12 +800,14 @@ pub fn parseGrenades(
 /// extra: fields of the weapon entity (e.g. m_nDropTick). ticks: restrict the output to these ticks.
 #[wasm_bindgen]
 pub fn parseWeapons(
-    file: Vec<u8>,
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+    file: JsValue,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     extra: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "Int32Array | number[] | null | undefined")]
     ticks: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
+    let file = required_bytes_from_js(file, "file")?;
     let extra = wanted_strings_from_js(extra, "extra")?;
     let real_names = match rm_user_friendly_names(&extra) {
         Ok(names) => names,
@@ -797,15 +854,14 @@ pub fn parseWeapons(
         inner: output.df.into(),
     };
     let result = soa_to_aos(helper, false);
-    let s = match serde_wasm_bindgen::to_value(&result) {
-        Ok(s) => s,
-        Err(e) => return Err(JsError::new(&format!("{}", e))),
-    };
-    Ok(s)
+    to_js_value(&result)
 }
 
 #[wasm_bindgen]
-pub fn parseHeader(file: Vec<u8>) -> Result<JsValue, JsError> {
+pub fn parseHeader(
+    #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")] file: JsValue,
+) -> Result<JsValue, JsError> {
+    let file = required_bytes_from_js(file, "file")?;
     let arc_huf = Arc::new(create_huffman_lookup_table());
 
     let settings = ParserInputs {
@@ -818,7 +874,7 @@ pub fn parseHeader(file: Vec<u8>) -> Result<JsValue, JsError> {
         parse_voice: false,
         parse_ents: false,
         wanted_ticks: vec![],
-        parse_projectiles: true,
+        parse_projectiles: false,
         list_props: false,
         only_convars: false,
         huffman_lookup_table: &arc_huf.clone(),
@@ -837,10 +893,7 @@ pub fn parseHeader(file: Vec<u8>) -> Result<JsValue, JsError> {
     };
     let mut hm: HashMap<String, String> = HashMap::default();
     hm.extend(output);
-    match serde_wasm_bindgen::to_value(&hm) {
-        Ok(s) => Ok(s),
-        Err(e) => return Err(JsError::new(&format!("{}", e))),
-    }
+    to_js_value(&hm)
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -854,11 +907,11 @@ export interface ChunkOpts {
     wantedPlayers?: string[];
     /** Not supported by ChunkParser: `true` is rejected because streamed chunks cannot be ordered per player. Use parseTicks or parseTickRange. */
     orderBySteamid?: boolean;
-    /** Grenades mode only: non-projectile classes to emit (e.g. ["CInferno"]). */
+    /** Grenades mode only (rejected in ticks mode): non-projectile classes to emit (e.g. ["CInferno"]). */
     grenadeClasses?: string[];
-    /** Grenades mode only: emit non-projectile grenades. Default true. */
+    /** Grenades mode only (rejected in ticks mode): emit non-projectile grenades. Default true. */
     nonProjectileGrenades?: boolean;
-    /** Grenades mode only: omit missing props instead of emitting nulls. Default false. */
+    /** Grenades mode only (rejected in ticks mode): omit missing props instead of emitting nulls. Default false. */
     skipNones?: boolean;
 }
 
@@ -912,10 +965,20 @@ struct ChunkOpts {
 /// Rejects non-array list options before serde can coerce them (a JS string is
 /// iterable, so `Vec<String>` deserialization would otherwise accept it) and
 /// before `continuous_decode_required` sees a character list.
-fn validate_chunk_opt_string_list(opts: &JsValue, key: &str) -> Result<(), JsError> {
+fn validate_chunk_opt_string_list(
+    opts: &JsValue,
+    key: &str,
+    required: bool,
+) -> Result<(), JsError> {
     let value = js_sys::Reflect::get(opts, &JsValue::from_str(key))
         .map_err(|_| JsError::new(&format!("invalid opts: could not read `{}`", key)))?;
     if value.is_null() || value.is_undefined() {
+        if required {
+            return Err(JsError::new(&format!(
+                "ChunkOpts.{} must be an array of strings",
+                key
+            )));
+        }
         return Ok(());
     }
     if !js_sys::Array::is_array(&value) {
@@ -952,7 +1015,7 @@ fn validate_chunk_opt_keys(opts: &JsValue) -> Result<(), JsError> {
         .map_err(|_| JsError::new("invalid opts: could not list fields"))?;
     for key in keys.iter() {
         let Some(key) = key.as_string() else {
-            continue;
+            return Err(JsError::new("ChunkOpts keys must be strings"));
         };
         if !CHUNK_OPT_KEYS.contains(&key.as_str()) {
             return Err(JsError::new(&format!(
@@ -984,7 +1047,11 @@ fn validate_chunk_opt_keys(opts: &JsValue) -> Result<(), JsError> {
 /// `wantedPlayers` and `orderBySteamid: true`, because neither can be applied
 /// across chunk boundaries. `propStates` is supported in ticks mode; in
 /// grenades mode `null`/`undefined`/`[]` mean no filter and a non-empty filter
-/// is rejected.
+/// is rejected. `wantedTicks` is ticks mode only; grenades mode rejects a
+/// non-empty tick list because per-chunk grenade rows cannot be sampled across
+/// segments the way one-shot `parseGrenades` can. Grenade-only options
+/// (`grenadeClasses`, `nonProjectileGrenades`, `skipNones`) are rejected in
+/// ticks mode instead of being silently ignored.
 ///
 /// One handle serves exactly one mode; the consumer creates one handle per
 /// pass, so one `Parser` + one preparse per handle is sufficient.
@@ -1011,35 +1078,39 @@ struct ChunkParserInner {
 
 #[wasm_bindgen]
 impl ChunkParser {
-    /// `file`: whole demo bytes (copied once, shared by all chunks).
+    /// `file`: whole demo bytes (copied once, shared by all chunks), as a
+    /// `Uint8Array`, `number[]` of bytes, or Node `Buffer`.
     /// `mode`: "ticks" or "grenades". `wanted_ticks`: ticks mode only, the
-    /// exact wanted tick list (`None`/empty means all ticks); ignored for
-    /// grenades mode. `opts`: `ChunkOpts` (see the generated declarations).
-    /// `propStates` is ticks mode only; `null`/`undefined`/`[]` mean no
-    /// filter in both modes, and a non-empty filter is rejected in grenades
-    /// mode. `wantedPlayers` (non-empty) and `orderBySteamid: true` are
-    /// rejected because a streamed result cannot filter or order across
-    /// chunks; use `parseTicks`/`parseTickRange` for those.
+    /// exact wanted tick list (`None`/empty means all ticks); grenades mode
+    /// rejects a non-empty list. `opts`: `ChunkOpts` (see the generated
+    /// declarations). `propStates` is ticks mode only; `null`/`undefined`/`[]`
+    /// mean no filter in both modes, and a non-empty filter is rejected in
+    /// grenades mode. `wantedPlayers` (non-empty) and `orderBySteamid: true`
+    /// are rejected because a streamed result cannot filter or order across
+    /// chunks; use `parseTicks`/`parseTickRange` for those. Grenade-only
+    /// options are rejected in ticks mode.
     #[wasm_bindgen(constructor)]
     pub fn new(
-        file: Vec<u8>,
+        #[wasm_bindgen(unchecked_param_type = "Uint8Array | number[]")]
+        file: JsValue,
         #[wasm_bindgen(unchecked_param_type = "string")]
         mode: JsValue,
         #[wasm_bindgen(unchecked_param_type = "Int32Array | number[] | null | undefined")]
         wanted_ticks: Option<JsValue>,
         opts: JsValue,
     ) -> Result<ChunkParser, JsError> {
+        let file = required_bytes_from_js(file, "file")?;
         let mode = mode
             .as_string()
             .ok_or_else(|| JsError::new("mode must be a string"))?;
-        if !opts.is_object() {
+        if !opts.is_object() || js_sys::Array::is_array(&opts) {
             return Err(JsError::new("ChunkOpts must be an object"));
         }
         let opts_value = opts.clone();
         validate_chunk_opt_keys(&opts_value)?;
-        validate_chunk_opt_string_list(&opts_value, "wantedProps")?;
-        validate_chunk_opt_string_list(&opts_value, "wantedPlayers")?;
-        validate_chunk_opt_string_list(&opts_value, "grenadeClasses")?;
+        validate_chunk_opt_string_list(&opts_value, "wantedProps", true)?;
+        validate_chunk_opt_string_list(&opts_value, "wantedPlayers", false)?;
+        validate_chunk_opt_string_list(&opts_value, "grenadeClasses", false)?;
         let opts: ChunkOpts = match serde_wasm_bindgen::from_value(opts) {
             Ok(opts) => opts,
             Err(e) => return Err(JsError::new(&format!("invalid opts: {}", e))),
@@ -1058,6 +1129,20 @@ impl ChunkParser {
         if opts.order_by_steamid == Some(true) {
             return Err(JsError::new(
                 "ChunkParser does not support orderBySteamid; use parseTicks or parseTickRange",
+            ));
+        }
+        if is_grenades {
+            if !wanted_ticks.is_empty() {
+                return Err(JsError::new(
+                    "ChunkParser grenades mode does not support wantedTicks; use parseGrenades",
+                ));
+            }
+        } else if opts.grenade_classes.is_some()
+            || opts.non_projectile_grenades.is_some()
+            || opts.skip_nones.is_some()
+        {
+            return Err(JsError::new(
+                "ChunkParser grenade options (grenadeClasses, nonProjectileGrenades, skipNones) are only supported in grenades mode",
             ));
         }
         let prop_states_value = match js_sys::Reflect::get(&opts_value, &JsValue::from_str("propStates")) {
@@ -1183,10 +1268,14 @@ impl ChunkParser {
         })
     }
 
-    /// Number of segments (fullpacket offsets) in this demo.
+    /// Number of segments (fullpacket offsets) in this demo. Errors after
+    /// `free`, matching `nextChunk`, instead of reporting a misleading zero.
     #[wasm_bindgen(getter, js_name = chunkCount)]
-    pub fn chunk_count(&self) -> usize {
-        self.inner.as_ref().map(|inner| inner.chunk_count).unwrap_or(0)
+    pub fn chunk_count(&self) -> Result<usize, JsError> {
+        self.inner
+            .as_ref()
+            .map(|inner| inner.chunk_count)
+            .ok_or_else(|| JsError::new("ChunkParser has been freed"))
     }
 
     /// Decode the next fullpacket segment and return its rows (`undefined`

@@ -225,10 +225,7 @@ pub fn parse_grenades(
 ) -> napi::Result<Value> {
   let bytes = resolve_byte_type(path_or_buf)?;
   let huf = create_huffman_lookup_table();
-  let mut extra_props = match extra {
-    Some(p) => p,
-    None => vec![],
-  };
+  let extra_props = extra.unwrap_or_default();
   let real_extra_props = match rm_user_friendly_names(&extra_props) {
     Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
@@ -266,13 +263,8 @@ pub fn parse_grenades(
   let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
   let output = parse_demo(bytes, &mut parser)?;
 
-  extra_props.push("tick".to_owned());
-  extra_props.push("steamid".to_owned());
-  extra_props.push("name".to_owned());
-
   let mut prop_infos = output.prop_controller.prop_infos.clone();
   prop_infos.sort_by_key(|x| x.prop_name.clone());
-  extra_props.sort();
 
   let helper = OutputSerdeHelperStruct {
     prop_infos: prop_infos.clone(),
@@ -298,10 +290,7 @@ pub fn parse_weapons(
 ) -> napi::Result<Value> {
   let bytes = resolve_byte_type(path_or_buf)?;
   let huf = create_huffman_lookup_table();
-  let mut extra_props = match extra {
-    Some(p) => p,
-    None => vec![],
-  };
+  let extra_props = extra.unwrap_or_default();
   let real_extra_props = match rm_user_friendly_names(&extra_props) {
     Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
@@ -337,13 +326,8 @@ pub fn parse_weapons(
   let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
   let output = parse_demo(bytes, &mut parser)?;
 
-  extra_props.push("tick".to_owned());
-  extra_props.push("steamid".to_owned());
-  extra_props.push("name".to_owned());
-
   let mut prop_infos = output.prop_controller.prop_infos.clone();
   prop_infos.sort_by_key(|x| x.prop_name.clone());
-  extra_props.sort();
 
   let helper = OutputSerdeHelperStruct {
     prop_infos: prop_infos.clone(),

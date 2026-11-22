@@ -30,6 +30,9 @@
 // `parseTickRange`, `parseEvent`, `parseEvents`, `parseGrenades`, and
 // `parseWeapons`. `ChunkPropState` must stay an alias of `WantedPropState` so
 // the chunk API and the native binding describe one prop-state concept.
+// Demo-byte parameters must keep checked `Uint8Array | number[]` types (and
+// `parseEvent`/`parseEvents` their optional `gameEventListBytes`), and
+// `parseEvent.event_name` must stay required `string` to match native.
 // Signatures and struct/function bodies are parsed structurally (balanced
 // parens/braces, comments and strings masked), so docs and substrings cannot
 // satisfy the guard.
@@ -389,6 +392,81 @@ for (const [name, params] of Object.entries(arrayTypedParams)) {
   }
 }
 
+// Demo bytes are passed as `JsValue` so the runtime can reject strings,
+// objects, and out-of-range entries with a `JsError` instead of letting
+// wasm-bindgen's `Vec<u8>` conversion coerce them. Pin the declarations to the
+// types the runtime accepts.
+const bytesTypedParams = {
+  parseEvent: 'file',
+  parseEvents: 'file',
+  listGameEvents: 'fileBytes',
+  listUpdatedFields: 'fileBytes',
+  parseTicks: 'file',
+  parseTickRange: 'file',
+  parseGrenades: 'file',
+  parseWeapons: 'file',
+  parseHeader: 'file'
+}
+const optionalBytesTypedParams = {
+  parseEvent: 'game_event_list_bytes',
+  parseEvents: 'game_event_list_bytes'
+}
+
+const missingBytesParamTypes = []
+for (const [name, param] of Object.entries(bytesTypedParams)) {
+  const rustEntry = paramEntry(rustParameters(name), param)
+  if (
+    rustEntry === null ||
+    !/#\[wasm_bindgen\(\s*unchecked_param_type\s*=/.test(rustEntry)
+  ) {
+    missingBytesParamTypes.push(`${name}.${param}`)
+  }
+
+  const tsEntry = paramEntry(tsParameters(name), param)
+  if (
+    tsEntry === null ||
+    !/Uint8Array/.test(tsEntry) ||
+    !/number\[\]/.test(tsEntry) ||
+    /\bnull\b/.test(tsEntry) ||
+    /\bundefined\b/.test(tsEntry) ||
+    /:\s*any\b/.test(tsEntry)
+  ) {
+    missingBytesParamTypes.push(`${name}.${param} (declaration)`)
+  }
+}
+for (const [name, param] of Object.entries(optionalBytesTypedParams)) {
+  const rustEntry = paramEntry(rustParameters(name), param)
+  if (
+    rustEntry === null ||
+    !/#\[wasm_bindgen\(\s*unchecked_optional_param_type\s*=/.test(rustEntry)
+  ) {
+    missingBytesParamTypes.push(`${name}.${param}`)
+  }
+
+  const tsEntry = paramEntry(tsParameters(name), param)
+  if (
+    tsEntry === null ||
+    !/Uint8Array/.test(tsEntry) ||
+    !/\bnull\b/.test(tsEntry) ||
+    !/\bundefined\b/.test(tsEntry) ||
+    /:\s*any\b/.test(tsEntry)
+  ) {
+    missingBytesParamTypes.push(`${name}.${param} (declaration)`)
+  }
+}
+
+// Native `parseEvent` takes a required `String`; WASM must too, or a missing
+// event name silently becomes the `"none"` sentinel instead of rejecting.
+const eventNameEntry = paramEntry(tsParameters('parseEvent'), 'event_name')
+const rustEventNameEntry = paramEntry(rustParameters('parseEvent'), 'event_name')
+const eventNameRequired =
+  eventNameEntry !== null &&
+  /\bevent_name\s*:\s*string\b/.test(eventNameEntry) &&
+  !/\bnull\b/.test(eventNameEntry) &&
+  !/\bundefined\b/.test(eventNameEntry) &&
+  rustEventNameEntry !== null &&
+  /#\[wasm_bindgen\(\s*unchecked_param_type\s*=/.test(rustEventNameEntry)
+
 // parseTicks can make wanted_props optional because every later parameter is
 // optional too. parseTickRange cannot: wasm-bindgen rejects an optional
 // parameter before required `tick_lo`/`tick_hi`, so its declaration stays
@@ -512,6 +590,16 @@ if (mismatchedTypedParams.length > 0) {
     `check-wasm-exports: generated declarations do not type the list parameters correctly: ${mismatchedTypedParams.join(', ')}`
   )
 }
+if (missingBytesParamTypes.length > 0) {
+  console.error(
+    `check-wasm-exports: demo bytes parameters are missing checked Uint8Array/number[] types: ${missingBytesParamTypes.join(', ')}`
+  )
+}
+if (!eventNameRequired) {
+  console.error(
+    'check-wasm-exports: parseEvent must take a required string event_name, matching native'
+  )
+}
 if (!parseTicksWantedPropsOptional) {
   console.error('check-wasm-exports: parseTicks declarations must make wanted_props optional')
 }
@@ -550,6 +638,8 @@ if (
   missingPropStateParams.length > 0 ||
   missingParamTypeAttrs.length > 0 ||
   mismatchedTypedParams.length > 0 ||
+  missingBytesParamTypes.length > 0 ||
+  !eventNameRequired ||
   !parseTicksWantedPropsOptional ||
   !tickRangeWantedPropsTyped ||
   !chunkPropStateAliasOk ||
