@@ -18765,6 +18765,29 @@ mod parity_tests {
         }
     }
 
+    /// Like `inputs_for` but with explicit `propStates` entries: state keys
+    /// are not also added to `wanted_player_props`, so this reproduces a
+    /// filter-only stateful prop.
+    fn inputs_for_prop_states<'a>(
+        huf: &'a Vec<(u8, u8)>,
+        wanted: &[String],
+        prop_states: &[(&str, Variant)],
+    ) -> ParserInputs<'a> {
+        let mut inputs = inputs_for(huf, wanted);
+        for (friendly_name, state) in prop_states {
+            let real_name = rm_user_friendly_names(&vec![friendly_name.to_string()])
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+            inputs
+                .real_name_to_og_name
+                .insert(real_name.clone(), friendly_name.to_string());
+            inputs.wanted_prop_states.insert(real_name, state.clone());
+        }
+        inputs
+    }
+
     fn event_slice(out: &DemoOutput, lo: i32, hi: i32) -> Vec<String> {
         out.game_events
             .iter()
@@ -18830,6 +18853,77 @@ mod parity_tests {
         assert_eq!(event_slice(&out, DMG_LO, DMG_HI), full_evts, "range event slice differs from full parse slice");
         for e in &out.game_events {
             assert!(e.tick >= DMG_LO && e.tick <= DMG_HI, "out-of-range event leaked: {} @ {}", e.name, e.tick);
+        }
+    }
+
+    /// A stateful prop that appears only in `propStates` (not in
+    /// `wantedProps`) must still select the continuous range decode:
+    /// per-segment decode resets damage counters at each segment head, so
+    /// the filter drops rows the full parse keeps. Fails pre-fix where
+    /// `parse_tick_range` looked only at `wanted_player_props`.
+    #[test]
+    fn filter_only_stateful_prop_uses_continuous_range() {
+        const LO: i32 = 4000;
+        const HI: i32 = 4050;
+        let mmap = load_demo();
+        let huf = create_huffman_lookup_table();
+        let wanted = vec!["health".to_string()];
+        let prop_states = [("damage_total", Variant::I32(0))];
+
+        let mut full_parser = Parser::new(
+            inputs_for_prop_states(&huf, &wanted, &prop_states),
+            crate::parse_demo::ParsingMode::ForceSingleThreaded,
+        );
+        let full = full_parser.parse_demo(&mmap).unwrap();
+        let full_rows = rows_in_range(&full, LO, HI);
+        assert!(!full_rows.is_empty(), "precondition: filter must match rows in range");
+
+        let parser = Parser::new(
+            inputs_for_prop_states(&huf, &wanted, &prop_states),
+            crate::parse_demo::ParsingMode::Normal,
+        );
+        let shared = parser.preparse(&mmap).unwrap();
+        let out = parser.parse_tick_range(&mmap, shared, LO, HI).unwrap();
+        let rows = aos_rows(&out);
+
+        assert_eq!(
+            sorted_canonical(rows),
+            sorted_canonical(full_rows),
+            "parse_tick_range with filter-only stateful prop differs from full parse"
+        );
+    }
+
+    /// The per-segment surfaces must reject a stateful prop even when it
+    /// arrives only through `propStates`.
+    #[test]
+    fn filter_only_stateful_prop_rejected_by_per_segment_surfaces() {
+        let mmap = load_demo();
+        let huf = create_huffman_lookup_table();
+        let wanted = vec!["health".to_string()];
+        let prop_states = [("damage_total", Variant::I32(0))];
+
+        let parser = Parser::new(
+            inputs_for_prop_states(&huf, &wanted, &prop_states),
+            crate::parse_demo::ParsingMode::Normal,
+        );
+        let shared = parser.preparse(&mmap).unwrap();
+        match parser.parse_tick_ranges(&mmap, shared, &[(4000, 4050)]) {
+            Err(DemoParserError::NonMultithreadableProps(msg)) => {
+                assert!(msg.contains("m_iDamage"), "error must name the prop: {msg}")
+            }
+            other => panic!("expected filter-only stateful rejection, got {:?}", other.map(|_| ())),
+        }
+
+        let parser = Parser::new(
+            inputs_for_prop_states(&huf, &wanted, &prop_states),
+            crate::parse_demo::ParsingMode::Normal,
+        );
+        let shared = parser.preparse(&mmap).unwrap();
+        match parser.iter_chunks(&mmap, shared) {
+            Err(DemoParserError::NonMultithreadableProps(msg)) => {
+                assert!(msg.contains("m_iDamage"), "error must name the prop: {msg}")
+            }
+            other => panic!("expected filter-only stateful rejection, got {:?}", other.map(|_| ())),
         }
     }
 

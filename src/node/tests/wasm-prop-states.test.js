@@ -416,6 +416,19 @@ wasmTest('parseTickRange propStates matches native parseTickRange', async (t) =>
   }
 })
 
+wasmTest('parseTickRange matches native when a stateful prop is only in propStates', () => {
+  const props = ['health']
+  const propStates = [{ prop: 'damage_total', state: 0 }]
+  const lo = 4000
+  const hi = 4050
+
+  const expected = nativeRange(props, lo, hi, propStates)
+  const actual = plain(wasmRange(props, lo, hi, propStates))
+
+  assert.ok(expected.length > 0, 'precondition: filter must match rows in range')
+  assert.deepEqual(actual, expected)
+})
+
 wasmTest('parseTickRange orderBySteamid matches native', async (t) => {
   const props = ['health']
   const lo = 100
@@ -1228,6 +1241,19 @@ wasmTest('ChunkParser rejects props that require continuous decode', () => {
     assert.throws(
       () => new wasm.ChunkParser(bytes, 'ticks', ticks, { wantedProps: props }),
       /continuous decode/
+    )
+  }
+})
+
+wasmTest('ChunkParser rejects stateful props that appear only in propStates', () => {
+  for (const prop of ['ducked', 'damage_total']) {
+    assert.throws(
+      () =>
+        new wasm.ChunkParser(bytes, 'ticks', ticks, {
+          wantedProps: ['health'],
+          propStates: [{ prop, state: prop === 'ducked' ? true : 0 }]
+        }),
+      /filter props[\s\S]*continuous decode/
     )
   }
 })

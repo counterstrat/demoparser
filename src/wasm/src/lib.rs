@@ -1018,9 +1018,10 @@ fn validate_chunk_opt_keys(opts: &JsValue) -> Result<(), JsError> {
 ///
 /// Limits versus one-shot parsing: `opts.wantedProps` is required, and props
 /// that need continuous decode (stateful props such as `ducked`,
-/// velocity-derived props such as `velocity_X`) are rejected, as are
-/// `wantedPlayers` and `orderBySteamid: true`, because neither can be applied
-/// across chunk boundaries. `propStates` is supported in ticks mode; in
+/// velocity-derived props such as `velocity_X`) are rejected whether selected
+/// through `wantedProps` or `propStates`, as are `wantedPlayers` and
+/// `orderBySteamid: true`, because none can be applied across chunk
+/// boundaries. `propStates` is supported in ticks mode; in
 /// grenades mode `null`/`undefined`/`[]` mean no filter and a non-empty filter
 /// is rejected. `wantedTicks` is ticks mode only; grenades mode rejects a
 /// non-empty tick list because per-chunk grenade rows cannot be sampled across
@@ -1150,10 +1151,12 @@ impl ChunkParser {
         // loudly instead of returning silently-wrong rows.
         // `parseTicks`/`parse_demo` decode continuously and serve these
         // props correctly.
-        let offending = continuous_decode_required(&real_names);
+        let mut filter_names = real_names.clone();
+        filter_names.extend(prop_state_names.iter().map(|(real_name, _)| real_name.clone()));
+        let offending = continuous_decode_required(&filter_names);
         if !offending.is_empty() {
             return Err(JsError::new(&format!(
-                "ChunkParser streaming cannot serve props {:?} that require cross-segment state or continuous decode (stateful props or velocity-derived props): chunked parsing cannot carry their state across segments; use parseTicks/parse_demo instead",
+                "ChunkParser streaming cannot serve filter props {:?} selected through wantedProps or propStates that require cross-segment state or continuous decode (stateful props or velocity-derived props): chunked parsing cannot carry their state across segments; use parseTicks/parse_demo instead",
                 offending
             )));
         }
