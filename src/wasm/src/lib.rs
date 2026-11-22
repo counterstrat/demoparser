@@ -115,18 +115,6 @@ fn prop_state_variant(state: &JsValue) -> Result<Variant, JsError> {
     ))
 }
 
-fn wanted_strings(values: Option<Vec<JsValue>>, label: &str) -> Result<Vec<String>, JsError> {
-    values
-        .unwrap_or_default()
-        .into_iter()
-        .map(|value| {
-            value
-                .as_string()
-                .ok_or_else(|| JsError::new(&format!("{} entries must be strings", label)))
-        })
-        .collect()
-}
-
 /// Validates the raw JS value before wasm-bindgen's `Vec<JsValue>` conversion
 /// can turn a non-array (for example a string, which is iterable) into a
 /// character list, matching native's `Vec<String>` argument rejection.
@@ -145,6 +133,71 @@ fn wanted_strings_from_js(values: Option<JsValue>, label: &str) -> Result<Vec<St
                 .ok_or_else(|| JsError::new(&format!("{} entries must be strings", label)))
         })
         .collect()
+}
+
+/// Validates the raw tick list before conversion: only a real array or an
+/// `Int32Array` is accepted, so strings, objects, and other typed arrays cannot
+/// be silently coerced into ticks. Entries follow ECMAScript `ToInt32`
+/// semantics (fractional values truncate, `NaN`/`Infinity` become 0), matching
+/// native's `Vec<i32>` conversion.
+fn wanted_ticks_from_js(values: Option<JsValue>) -> Result<Vec<i32>, JsError> {
+    let Some(values) = values.filter(|value| !value.is_null() && !value.is_undefined()) else {
+        return Ok(vec![]);
+    };
+    let is_int32_array = values.is_instance_of::<js_sys::Int32Array>();
+    if !js_sys::Array::is_array(&values) && !is_int32_array {
+        return Err(JsError::new(
+            "wantedTicks must be an Int32Array or an array of integers",
+        ));
+    }
+    js_sys::Array::from(&values)
+        .iter()
+        .map(|value| {
+            let number = value
+                .as_f64()
+                .ok_or_else(|| JsError::new("wantedTicks entries must be numbers"))?;
+            Ok(to_int32(number))
+        })
+        .collect()
+}
+
+fn to_int32(value: f64) -> i32 {
+    if !value.is_finite() {
+        return 0;
+    }
+    let wrapped = value.trunc().rem_euclid(4294967296.0);
+    if wrapped >= 2147483648.0 {
+        (wrapped - 4294967296.0) as i32
+    } else {
+        wrapped as i32
+    }
+}
+
+fn optional_string_from_js(value: Option<JsValue>, label: &str) -> Result<Option<String>, JsError> {
+    let Some(value) = value.filter(|value| !value.is_null() && !value.is_undefined()) else {
+        return Ok(None);
+    };
+    value
+        .as_string()
+        .map(Some)
+        .ok_or_else(|| JsError::new(&format!("{} must be a string", label)))
+}
+
+fn required_i32_from_js(value: JsValue, label: &str) -> Result<i32, JsError> {
+    let number = value
+        .as_f64()
+        .ok_or_else(|| JsError::new(&format!("{} must be a number", label)))?;
+    Ok(to_int32(number))
+}
+
+fn optional_bool_from_js(value: Option<JsValue>, label: &str) -> Result<Option<bool>, JsError> {
+    let Some(value) = value.filter(|value| !value.is_null() && !value.is_undefined()) else {
+        return Ok(None);
+    };
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| JsError::new(&format!("{} must be a boolean", label)))
 }
 
 fn to_js_value<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
@@ -166,12 +219,16 @@ fn to_js_map_object<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
 #[wasm_bindgen]
 pub fn parseEvent(
     file: Vec<u8>,
-    event_name: Option<String>,
-    wanted_player_props: Option<Vec<JsValue>>,
-    wanted_other_props: Option<Vec<JsValue>>,
+    #[wasm_bindgen(unchecked_optional_param_type = "string | null | undefined")]
+    event_name: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
+    wanted_player_props: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
+    wanted_other_props: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
-    let player_props = wanted_strings(wanted_player_props, "wantedPlayerProps")?;
-    let other_props = wanted_strings(wanted_other_props, "wantedOtherProps")?;
+    let event_name = optional_string_from_js(event_name, "eventName")?;
+    let player_props = wanted_strings_from_js(wanted_player_props, "wantedPlayerProps")?;
+    let other_props = wanted_strings_from_js(wanted_other_props, "wantedOtherProps")?;
     let real_names_player = match rm_user_friendly_names(&player_props) {
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
@@ -225,13 +282,19 @@ pub fn parseEvent(
 #[wasm_bindgen]
 pub fn parseEvents(
     file: Vec<u8>,
-    event_names: Option<Vec<JsValue>>,
-    wanted_player_props: Option<Vec<JsValue>>,
-    wanted_other_props: Option<Vec<JsValue>>,
+    #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
+    event_names: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
+    wanted_player_props: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
+    wanted_other_props: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
-    let event_names = wanted_strings(event_names, "eventNames")?;
-    let player_props = wanted_strings(wanted_player_props, "wantedPlayerProps")?;
-    let other_props = wanted_strings(wanted_other_props, "wantedOtherProps")?;
+    let event_names = match event_names.filter(|value| !value.is_null() && !value.is_undefined()) {
+        Some(value) => wanted_strings_from_js(Some(value), "eventNames")?,
+        None => return Err(JsError::new("No events provided!")),
+    };
+    let player_props = wanted_strings_from_js(wanted_player_props, "wantedPlayerProps")?;
+    let other_props = wanted_strings_from_js(wanted_other_props, "wantedOtherProps")?;
     let real_names_player = match rm_user_friendly_names(&player_props) {
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
@@ -371,14 +434,14 @@ pub fn parseTicks(
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_props: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "Int32Array | number[] | null | undefined")]
-    wanted_ticks: Option<Vec<i32>>,
+    wanted_ticks: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_players: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
-    struct_of_arrays: Option<bool>,
+    struct_of_arrays: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
-    order_by_steamid: Option<bool>,
-    #[wasm_bindgen(unchecked_optional_param_type = "ChunkPropState[] | null | undefined")]
+    order_by_steamid: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "WantedPropState[] | null | undefined")]
     prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
     let wanted_props = wanted_strings_from_js(wanted_props, "wantedProps")?;
@@ -399,10 +462,9 @@ pub fn parseTicks(
     for (real_name, user_friendly_name) in &prop_state_names {
         real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
     }
-    let wanted_ticks = match wanted_ticks {
-        Some(t) => t,
-        None => vec![],
-    };
+    let wanted_ticks = wanted_ticks_from_js(wanted_ticks)?;
+    let struct_of_arrays = optional_bool_from_js(struct_of_arrays, "structOfArrays")?;
+    let order_by_steamid = optional_bool_from_js(order_by_steamid, "orderBySteamid")?;
     let order_by_steamid = match order_by_steamid {
         Some(true) => true,
         _ => false,
@@ -480,20 +542,28 @@ pub fn parseTicks(
 #[wasm_bindgen]
 pub fn parseTickRange(
     file: Vec<u8>,
+    // wasm-bindgen forbids an optional parameter before required `tick_lo`/
+    // `tick_hi`, so this stays required-but-nullable in the declarations. The
+    // runtime still treats `null`/`undefined` as no prop filter, same as
+    // `parseTicks`.
     #[wasm_bindgen(unchecked_param_type = "string[] | null | undefined")]
     wanted_props: Option<JsValue>,
-    tick_lo: i32,
-    tick_hi: i32,
+    #[wasm_bindgen(unchecked_param_type = "number")]
+    tick_lo: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "number")]
+    tick_hi: JsValue,
     #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
     wanted_players: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
-    struct_of_arrays: Option<bool>,
+    struct_of_arrays: Option<JsValue>,
     #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
-    order_by_steamid: Option<bool>,
-    #[wasm_bindgen(unchecked_optional_param_type = "ChunkPropState[] | null | undefined")]
+    order_by_steamid: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "WantedPropState[] | null | undefined")]
     prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
     let wanted_props = wanted_strings_from_js(wanted_props, "wantedProps")?;
+    let tick_lo = required_i32_from_js(tick_lo, "tickLo")?;
+    let tick_hi = required_i32_from_js(tick_hi, "tickHi")?;
     let wanted_players_u64 = wanted_strings_from_js(wanted_players, "wantedPlayers")?
         .iter()
         .map(|x| x.parse::<u64>().unwrap_or(0))
@@ -511,6 +581,8 @@ pub fn parseTickRange(
     for (real_name, user_friendly_name) in &prop_state_names {
         real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
     }
+    let struct_of_arrays = optional_bool_from_js(struct_of_arrays, "structOfArrays")?;
+    let order_by_steamid = optional_bool_from_js(order_by_steamid, "orderBySteamid")?;
     let order_by_steamid = match order_by_steamid {
         Some(true) => true,
         _ => false,
@@ -593,23 +665,29 @@ pub fn parseTickRange(
 #[wasm_bindgen]
 pub fn parseGrenades(
     file: Vec<u8>,
-    extra: Option<Vec<JsValue>>,
-    grenades: Option<bool>,
-    ticks: Option<Vec<i32>>,
-    grenade_classes: Option<Vec<JsValue>>,
-    skip_nones: Option<bool>,
+    #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
+    extra: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
+    grenades: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "Int32Array | number[] | null | undefined")]
+    ticks: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
+    grenade_classes: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "boolean | null | undefined")]
+    skip_nones: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
-    let mut extra = wanted_strings(extra, "extra")?;
+    let mut extra = wanted_strings_from_js(extra, "extra")?;
     let mut real_names = match rm_user_friendly_names(&extra) {
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     };
-    let grenades = grenades.unwrap_or(true);
-    let grenade_classes = match grenade_classes {
-        Some(classes) => Some(wanted_strings(Some(classes), "grenadeClasses")?),
+    let grenades = optional_bool_from_js(grenades, "grenades")?.unwrap_or(true);
+    let grenade_classes = match grenade_classes.filter(|value| !value.is_null() && !value.is_undefined()) {
+        Some(classes) => Some(wanted_strings_from_js(Some(classes), "grenadeClasses")?),
         None => None,
     };
-    let skip_nones = skip_nones.unwrap_or(false);
+    let skip_nones = optional_bool_from_js(skip_nones, "skipNones")?.unwrap_or(false);
+    let wanted_ticks = wanted_ticks_from_js(ticks)?;
 
     let arc_huf = Arc::new(create_huffman_lookup_table());
     let mut real_name_to_og_name = HashMap::default();
@@ -625,7 +703,7 @@ pub fn parseGrenades(
         collect_ticks: true,
         parse_voice: false,
         parse_ents: true,
-        wanted_ticks: ticks.unwrap_or_default(),
+        wanted_ticks: wanted_ticks,
         parse_projectiles: true,
         list_props: false,
         only_convars: false,
@@ -666,12 +744,19 @@ pub fn parseGrenades(
 /// never picked up. One row per weapon per tick; steamid/name refer to the player who dropped it.
 /// extra: fields of the weapon entity (e.g. m_nDropTick). ticks: restrict the output to these ticks.
 #[wasm_bindgen]
-pub fn parseWeapons(file: Vec<u8>, extra: Option<Vec<JsValue>>, ticks: Option<Vec<i32>>) -> Result<JsValue, JsError> {
-    let extra = wanted_strings(extra, "extra")?;
+pub fn parseWeapons(
+    file: Vec<u8>,
+    #[wasm_bindgen(unchecked_optional_param_type = "string[] | null | undefined")]
+    extra: Option<JsValue>,
+    #[wasm_bindgen(unchecked_optional_param_type = "Int32Array | number[] | null | undefined")]
+    ticks: Option<JsValue>,
+) -> Result<JsValue, JsError> {
+    let extra = wanted_strings_from_js(extra, "extra")?;
     let real_names = match rm_user_friendly_names(&extra) {
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     };
+    let wanted_ticks = wanted_ticks_from_js(ticks)?;
     let mut real_name_to_og_name = HashMap::default();
     for (real_name, user_friendly_name) in real_names.iter().zip(&extra) {
         real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
@@ -687,7 +772,7 @@ pub fn parseWeapons(file: Vec<u8>, extra: Option<Vec<JsValue>>, ticks: Option<Ve
         collect_ticks: true,
         parse_voice: false,
         parse_ents: true,
-        wanted_ticks: ticks.unwrap_or_default(),
+        wanted_ticks: wanted_ticks,
         parse_projectiles: false,
         list_props: false,
         only_convars: false,
@@ -764,7 +849,7 @@ export interface ChunkOpts {
     /** Ticks mode: player prop friendly names (e.g. X, Y, Z). Grenades mode: extra prop names. */
     wantedProps: string[];
     /** Ticks mode only: keep rows where every player matches every `{ prop, state }`. `null`, `undefined`, and `[]` mean no filter; a non-empty filter is rejected in grenades mode. */
-    propStates?: ChunkPropState[];
+    propStates?: WantedPropState[];
     /** Not supported by ChunkParser: rejected when non-empty. Use parseTicks instead. */
     wantedPlayers?: string[];
     /** Not supported by ChunkParser: `true` is rejected because streamed chunks cannot be ordered per player. Use parseTicks or parseTickRange. */
@@ -777,10 +862,14 @@ export interface ChunkOpts {
     skipNones?: boolean;
 }
 
-export interface ChunkPropState {
+/** Shape shared with the native binding; `{ prop, state }` filters tick rows. */
+export interface WantedPropState {
     prop: string;
     state: boolean | string | number | bigint;
 }
+
+/** Alias kept for the chunk API; `WantedPropState` is the single shape. */
+export type ChunkPropState = WantedPropState;
 "#;
 
 /// Options for `ChunkParser` (the `opts` constructor argument), deserialized
@@ -818,6 +907,62 @@ struct ChunkOpts {
     /// semantics. `null`/`undefined`/`[]` mean no filter.
     #[serde(rename = "propStates")]
     prop_states: Option<serde::de::IgnoredAny>,
+}
+
+/// Rejects non-array list options before serde can coerce them (a JS string is
+/// iterable, so `Vec<String>` deserialization would otherwise accept it) and
+/// before `continuous_decode_required` sees a character list.
+fn validate_chunk_opt_string_list(opts: &JsValue, key: &str) -> Result<(), JsError> {
+    let value = js_sys::Reflect::get(opts, &JsValue::from_str(key))
+        .map_err(|_| JsError::new(&format!("invalid opts: could not read `{}`", key)))?;
+    if value.is_null() || value.is_undefined() {
+        return Ok(());
+    }
+    if !js_sys::Array::is_array(&value) {
+        return Err(JsError::new(&format!(
+            "ChunkOpts.{} must be an array of strings",
+            key
+        )));
+    }
+    for entry in js_sys::Array::from(&value).iter() {
+        if entry.as_string().is_none() {
+            return Err(JsError::new(&format!(
+                "ChunkOpts.{} entries must be strings",
+                key
+            )));
+        }
+    }
+    Ok(())
+}
+
+const CHUNK_OPT_KEYS: [&str; 7] = [
+    "wantedProps",
+    "propStates",
+    "wantedPlayers",
+    "orderBySteamid",
+    "grenadeClasses",
+    "nonProjectileGrenades",
+    "skipNones",
+];
+
+/// `serde_wasm_bindgen` only visits declared fields, so `deny_unknown_fields`
+/// cannot see extra keys. Reject them here instead of silently ignoring them.
+fn validate_chunk_opt_keys(opts: &JsValue) -> Result<(), JsError> {
+    let keys = js_sys::Reflect::own_keys(opts)
+        .map_err(|_| JsError::new("invalid opts: could not list fields"))?;
+    for key in keys.iter() {
+        let Some(key) = key.as_string() else {
+            continue;
+        };
+        if !CHUNK_OPT_KEYS.contains(&key.as_str()) {
+            return Err(JsError::new(&format!(
+                "ChunkOpts unknown field `{}`; expected one of {}",
+                key,
+                CHUNK_OPT_KEYS.join(", ")
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Bounded-memory streaming handle over one demo: the file is copied into
@@ -876,12 +1021,30 @@ impl ChunkParser {
     /// rejected because a streamed result cannot filter or order across
     /// chunks; use `parseTicks`/`parseTickRange` for those.
     #[wasm_bindgen(constructor)]
-    pub fn new(file: Vec<u8>, mode: String, wanted_ticks: Option<Vec<i32>>, opts: JsValue) -> Result<ChunkParser, JsError> {
+    pub fn new(
+        file: Vec<u8>,
+        #[wasm_bindgen(unchecked_param_type = "string")]
+        mode: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "Int32Array | number[] | null | undefined")]
+        wanted_ticks: Option<JsValue>,
+        opts: JsValue,
+    ) -> Result<ChunkParser, JsError> {
+        let mode = mode
+            .as_string()
+            .ok_or_else(|| JsError::new("mode must be a string"))?;
+        if !opts.is_object() {
+            return Err(JsError::new("ChunkOpts must be an object"));
+        }
         let opts_value = opts.clone();
+        validate_chunk_opt_keys(&opts_value)?;
+        validate_chunk_opt_string_list(&opts_value, "wantedProps")?;
+        validate_chunk_opt_string_list(&opts_value, "wantedPlayers")?;
+        validate_chunk_opt_string_list(&opts_value, "grenadeClasses")?;
         let opts: ChunkOpts = match serde_wasm_bindgen::from_value(opts) {
             Ok(opts) => opts,
             Err(e) => return Err(JsError::new(&format!("invalid opts: {}", e))),
         };
+        let wanted_ticks = wanted_ticks_from_js(wanted_ticks)?;
         let is_grenades = match mode.as_str() {
             "ticks" => false,
             "grenades" => true,
@@ -979,7 +1142,7 @@ impl ChunkParser {
                 collect_ticks: true,
                 parse_voice: false,
                 parse_ents: true,
-                wanted_ticks: wanted_ticks.unwrap_or_default(),
+                wanted_ticks: wanted_ticks,
                 parse_projectiles: false,
                 list_props: false,
                 only_convars: false,

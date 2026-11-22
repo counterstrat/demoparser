@@ -25,6 +25,13 @@ if (wasmBuilt) {
 const wasmTypesSource = wasmBuilt && existsSync(wasmTypes) ? readFileSync(wasmTypes, 'utf8') : ''
 const chunkOptsDeclaresPropStates =
   /\binterface\s+ChunkOpts\s*\{[\s\S]*?\bpropStates\?\s*:/.test(wasmTypesSource)
+const tickRangeWantedPropsTyped =
+  /export function parseTickRange\([\s\S]*?wanted_props:\s*string\[\] \| null \| undefined/.test(
+    wasmTypesSource
+  )
+const wantedPropStateAlias =
+  /\binterface\s+WantedPropState\b/.test(wasmTypesSource) &&
+  /\btype\s+ChunkPropState\s*=\s*WantedPropState\b/.test(wasmTypesSource)
 const wasmSupportsPropStates = Boolean(
   wasm &&
     !wasmImportError &&
@@ -52,6 +59,14 @@ if (wasmBuilt) {
     assert.ok(
       chunkOptsDeclaresPropStates,
       'ChunkOpts declarations are missing propStates; run `npm run build:wasm`'
+    )
+    assert.ok(
+      tickRangeWantedPropsTyped,
+      'parseTickRange wanted_props must be a required nullable string[] (wasm-bindgen cannot mark it optional before tick_lo/tick_hi); run `npm run build:wasm`'
+    )
+    assert.ok(
+      wantedPropStateAlias,
+      'declarations must define WantedPropState and alias ChunkPropState to it; run `npm run build:wasm`'
     )
   })
 }
@@ -380,6 +395,28 @@ wasmTest('parseTickRange combines propStates with orderBySteamid', () => {
   assert.deepEqual(actual, expected)
 })
 
+// Native serializes the per-player map with u64 keys while WASM uses String
+// keys; JSON object keys are strings on both sides, so the shapes compare equal.
+wasmTest('parseTicks combines propStates, structOfArrays, and orderBySteamid', () => {
+  const props = ['health', 'active_weapon_skin']
+  const propStates = [{ prop: 'health', state: 100 }]
+
+  const expected = nativeTicks(props, ticks, propStates, true, true)
+  const actual = plain(wasmTicks(props, ticks, propStates, true, true))
+  assert.deepEqual(actual, expected)
+})
+
+wasmTest('parseTickRange combines propStates, structOfArrays, and orderBySteamid', () => {
+  const props = ['health', 'active_weapon_skin']
+  const lo = 100
+  const hi = 300
+  const propStates = [{ prop: 'health', state: 100 }]
+
+  const expected = nativeRange(props, lo, hi, propStates, true, true)
+  const actual = plain(wasmRange(props, lo, hi, propStates, true, true))
+  assert.deepEqual(actual, expected)
+})
+
 // active_weapon_skin has no values on the sampled ticks, so it exercises the
 // absent-column path that emits a null column (SOA) or null per row (AOS).
 // Ordering branches serialize through a different serializer, so test both.
@@ -469,6 +506,238 @@ wasmTest('non-array wantedProps and wantedPlayers are rejected like native', () 
       { message: 'wantedPlayers must be an array of strings' }
     )
   }
+})
+
+const wasmListArgCases = [
+  {
+    name: 'parseEvent wantedPlayerProps',
+    label: 'wantedPlayerProps',
+    native: (value) => native.parseEvent(demoPath, 'player_death', value),
+    wasm: (value) => wasm.parseEvent(bytes, 'player_death', value)
+  },
+  {
+    name: 'parseEvent wantedOtherProps',
+    label: 'wantedOtherProps',
+    native: (value) => native.parseEvent(demoPath, 'player_death', null, value),
+    wasm: (value) => wasm.parseEvent(bytes, 'player_death', null, value)
+  },
+  {
+    name: 'parseEvents eventNames',
+    label: 'eventNames',
+    native: (value) => native.parseEvents(demoPath, value),
+    wasm: (value) => wasm.parseEvents(bytes, value)
+  },
+  {
+    name: 'parseEvents wantedPlayerProps',
+    label: 'wantedPlayerProps',
+    native: (value) => native.parseEvents(demoPath, ['player_death'], value),
+    wasm: (value) => wasm.parseEvents(bytes, ['player_death'], value)
+  },
+  {
+    name: 'parseEvents wantedOtherProps',
+    label: 'wantedOtherProps',
+    native: (value) => native.parseEvents(demoPath, ['player_death'], null, value),
+    wasm: (value) => wasm.parseEvents(bytes, ['player_death'], null, value)
+  },
+  {
+    name: 'parseGrenades extra',
+    label: 'extra',
+    native: (value) => native.parseGrenades(demoPath, value),
+    wasm: (value) => wasm.parseGrenades(bytes, value)
+  },
+  {
+    name: 'parseGrenades grenadeClasses',
+    label: 'grenadeClasses',
+    native: (value) => native.parseGrenades(demoPath, null, false, null, value),
+    wasm: (value) => wasm.parseGrenades(bytes, null, false, null, value)
+  },
+  {
+    name: 'parseWeapons extra',
+    label: 'extra',
+    native: (value) => native.parseWeapons(demoPath, value),
+    wasm: (value) => wasm.parseWeapons(bytes, value)
+  }
+]
+
+wasmTest('non-array event and grenade list arguments are rejected like native', async (t) => {
+  for (const { name, label, native: callNative, wasm: callWasm } of wasmListArgCases) {
+    for (const value of ['health', 42, {}]) {
+      await t.test(`${name} ${typeof value}`, () => {
+        assert.throws(() => callNative(value), /Array length/)
+        assert.throws(() => callWasm(value), {
+          message: `${label} must be an array of strings`
+        })
+      })
+    }
+  }
+})
+
+wasmTest('non-string event and grenade list entries are rejected like native', async (t) => {
+  for (const { name, label, native: callNative, wasm: callWasm } of wasmListArgCases) {
+    for (const entry of [42, {}, null]) {
+      await t.test(`${name} ${entry === null ? 'null' : typeof entry}`, () => {
+        assert.throws(() => callNative([entry]), /Failed to convert JavaScript value/)
+        assert.throws(() => callWasm([entry]), {
+          message: `${label} entries must be strings`
+        })
+      })
+    }
+  }
+})
+
+const tickListCases = [
+  {
+    name: 'parseTicks wantedTicks',
+    native: (value) => native.parseTicks(demoPath, ['health'], value, null, false, false, null),
+    wasm: (value) => wasm.parseTicks(bytes, ['health'], value, null, false, false, null)
+  },
+  {
+    name: 'parseGrenades ticks',
+    native: (value) => native.parseGrenades(demoPath, null, false, value),
+    wasm: (value) => wasm.parseGrenades(bytes, null, false, value)
+  },
+  {
+    name: 'parseWeapons ticks',
+    native: (value) => native.parseWeapons(demoPath, null, value),
+    wasm: (value) => wasm.parseWeapons(bytes, null, value)
+  }
+]
+
+wasmTest('non-array tick lists are rejected like native', async (t) => {
+  for (const { name, native: callNative, wasm: callWasm } of tickListCases) {
+    for (const [label, value] of [
+      ['string', '100'],
+      ['number', 100],
+      ['object', {}],
+      ['Float64Array', new Float64Array([100])]
+    ]) {
+      await t.test(`${name} ${label}`, () => {
+        assert.throws(() => callNative(value), /Array length/)
+        assert.throws(() => callWasm(value), {
+          message: 'wantedTicks must be an Int32Array or an array of integers'
+        })
+      })
+    }
+  }
+})
+
+wasmTest('non-numeric tick entries are rejected like native', async (t) => {
+  for (const { name, native: callNative, wasm: callWasm } of tickListCases) {
+    for (const [label, entry] of [
+      ['numeric string', '100'],
+      ['bigint', 100n],
+      ['null', null],
+      ['boolean', true]
+    ]) {
+      await t.test(`${name} ${label}`, () => {
+        assert.throws(() => callNative([entry]), /Failed to convert/)
+        assert.throws(() => callWasm([entry]), {
+          message: 'wantedTicks entries must be numbers'
+        })
+      })
+    }
+  }
+})
+
+wasmTest('Int32Array ticks are accepted by WASM; native only takes number[]', () => {
+  const expected = nativeTicks(['health'], [100], null)
+  const actual = plain(wasm.parseTicks(bytes, ['health'], new Int32Array([100]), null, false, false, null))
+  assert.deepEqual(actual, expected)
+
+  assert.throws(
+    () => native.parseTicks(demoPath, ['health'], new Int32Array([100]), null, false, false, null),
+    /Array length/
+  )
+})
+
+wasmTest('fractional and non-finite tick entries truncate like native', async (t) => {
+  for (const [label, value] of [
+    ['fraction', [100.5]],
+    ['NaN', [NaN]],
+    ['Infinity', [Infinity]]
+  ]) {
+    await t.test(label, () => {
+      const expected = native.parseTicks(demoPath, ['health'], value, null, false, false, null)
+      assert.deepEqual(
+        plain(wasm.parseTicks(bytes, ['health'], value, null, false, false, null)),
+        expected
+      )
+    })
+  }
+})
+
+wasmTest('null, undefined, and empty tick lists mean all ticks', () => {
+  const all = plain(wasm.parseTicks(bytes, ['health'], null, null, false, false, null))
+  assert.deepEqual(
+    plain(wasm.parseTicks(bytes, ['health'], undefined, null, false, false, null)),
+    all
+  )
+  assert.deepEqual(plain(wasm.parseTicks(bytes, ['health'], [], null, false, false, null)), all)
+
+  const oneTick = plain(wasm.parseTicks(bytes, ['health'], [100], null, false, false, null))
+  assert.ok(all.length > oneTick.length)
+})
+
+wasmTest('parseEvents requires eventNames like native', () => {
+  assert.throws(() => native.parseEvents(demoPath), { message: 'No events provided!' })
+  assert.throws(() => wasm.parseEvents(bytes), { message: 'No events provided!' })
+  assert.throws(() => native.parseEvents(demoPath, null), { message: 'No events provided!' })
+  assert.throws(() => wasm.parseEvents(bytes, null), { message: 'No events provided!' })
+})
+
+wasmTest('non-string event names and non-boolean flags are rejected like native', async (t) => {
+  await t.test('eventName', () => {
+    assert.throws(() => native.parseEvent(demoPath, 42), /Failed to convert JavaScript value/)
+    assert.throws(() => wasm.parseEvent(bytes, 42), { message: 'eventName must be a string' })
+  })
+
+  const boolCases = [
+    ['parseTicks structOfArrays', (v) => native.parseTicks(demoPath, ['health'], [100], null, v, false, null), (v) => wasm.parseTicks(bytes, ['health'], [100], null, v, false, null), 'structOfArrays'],
+    ['parseTicks orderBySteamid', (v) => native.parseTicks(demoPath, ['health'], [100], null, false, v, null), (v) => wasm.parseTicks(bytes, ['health'], [100], null, false, v, null), 'orderBySteamid'],
+    ['parseTickRange structOfArrays', (v) => native.parseTickRange(demoPath, ['health'], 100, 100, null, v, false, null), (v) => wasm.parseTickRange(bytes, ['health'], 100, 100, null, v, false, null), 'structOfArrays'],
+    ['parseTickRange orderBySteamid', (v) => native.parseTickRange(demoPath, ['health'], 100, 100, null, false, v, null), (v) => wasm.parseTickRange(bytes, ['health'], 100, 100, null, false, v, null), 'orderBySteamid'],
+    ['parseGrenades grenades', (v) => native.parseGrenades(demoPath, null, v, [100]), (v) => wasm.parseGrenades(bytes, null, v, [100]), 'grenades'],
+    ['parseGrenades skipNones', (v) => native.parseGrenades(demoPath, null, false, [100], null, v), (v) => wasm.parseGrenades(bytes, null, false, [100], null, v), 'skipNones']
+  ]
+
+  for (const [name, callNative, callWasm, label] of boolCases) {
+    await t.test(name, () => {
+      assert.throws(() => callNative('yes'), /bool/)
+      assert.throws(() => callWasm('yes'), { message: `${label} must be a boolean` })
+    })
+  }
+})
+
+wasmTest('non-numeric range bounds are rejected like native', async (t) => {
+  for (const [label, value] of [
+    ['string', '100'],
+    ['object', {}],
+    ['null', null],
+    ['undefined', undefined]
+  ]) {
+    await t.test(label, () => {
+      assert.throws(
+        () => native.parseTickRange(demoPath, ['health'], value, 300, null, false, false, null),
+        /rust type `i32`/
+      )
+      assert.throws(
+        () => wasm.parseTickRange(bytes, ['health'], value, 300, null, false, false, null),
+        { message: 'tickLo must be a number' }
+      )
+      assert.throws(
+        () => native.parseTickRange(demoPath, ['health'], 100, value, null, false, false, null),
+        /rust type `i32`/
+      )
+      assert.throws(
+        () => wasm.parseTickRange(bytes, ['health'], 100, value, null, false, false, null),
+        { message: 'tickHi must be a number' }
+      )
+    })
+  }
+
+  const expected = native.parseTickRange(demoPath, ['health'], 100.5, 300, null, false, false, null)
+  const actual = plain(wasm.parseTickRange(bytes, ['health'], 100.5, 300, null, false, false, null))
+  assert.deepEqual(actual, expected)
 })
 
 // The declarations type these parameters as arrays (nullable/optional), so the
@@ -585,10 +854,35 @@ wasmTest('non-string wantedProps and wantedPlayers entries are rejected like nat
 // Both bindings map unparsable wantedPlayers entries to 0 (`unwrap_or(0)`).
 // Lock that parity instead of letting the two sides drift.
 wasmTest('invalid wantedPlayers entries match native unwrap-or-zero behavior', () => {
-  for (const players of [['not-a-number'], ['0'], ['76561198265366770', 'nope']]) {
+  const playersCases = [
+    ['not-a-number'],
+    [''],
+    [' 76561198265366770'],
+    ['-1'],
+    ['18446744073709551616'],
+    ['0'],
+    ['76561198265366770', 'nope']
+  ]
+
+  for (const players of playersCases) {
     const expected = native.parseTicks(demoPath, ['steamid'], [100], players, false, false, null)
     const actual = plain(wasm.parseTicks(bytes, ['steamid'], [100], players, false, false, null))
     assert.deepEqual(actual, expected)
+
+    const expectedRange = native.parseTickRange(
+      demoPath,
+      ['steamid'],
+      100,
+      100,
+      players,
+      false,
+      false,
+      null
+    )
+    const actualRange = plain(
+      wasm.parseTickRange(bytes, ['steamid'], 100, 100, players, false, false, null)
+    )
+    assert.deepEqual(actualRange, expectedRange)
   }
 
   const invalid = native.parseTicks(demoPath, ['steamid'], [100], ['not-a-number'], false, false, null)
@@ -671,9 +965,9 @@ wasmTest('ChunkParser rejects wantedPlayers and orderBySteamid', () => {
 })
 
 wasmTest('ChunkParser rejects props that require continuous decode', () => {
-  for (const prop of ['ducked', 'velocity_X']) {
+  for (const props of [['ducked'], ['velocity_X'], ['ducked', 'velocity_X']]) {
     assert.throws(
-      () => new wasm.ChunkParser(bytes, 'ticks', ticks, { wantedProps: [prop] }),
+      () => new wasm.ChunkParser(bytes, 'ticks', ticks, { wantedProps: props }),
       /continuous decode/
     )
   }
@@ -717,6 +1011,132 @@ wasmTest('ChunkParser treats null, undefined, and empty propStates as unfiltered
     assert.ok(parser.chunkCount > 0)
     parser.free()
   }
+})
+
+wasmTest('ChunkParser ticks mode matches native for prefixed and unknown propStates', async (t) => {
+  const collect = (opts) => {
+    const rows = []
+    const parser = new wasm.ChunkParser(bytes, 'ticks', ticks, { wantedProps: ['health'], ...opts })
+    let chunk
+    while ((chunk = parser.nextChunk()) !== undefined) rows.push(...chunk)
+    return plain(rows)
+  }
+
+  await t.test('prefixed', () => {
+    const propStates = [{ prop: 'Weapon.health', state: 100 }]
+    assert.deepEqual(collect({ propStates }), nativeTicks(['health'], ticks, propStates))
+  })
+
+  await t.test('unknown', () => {
+    const propStates = [{ prop: 'no_such_prop', state: 1 }]
+    assert.deepEqual(collect({ propStates }), nativeTicks(['health'], ticks, propStates))
+  })
+})
+
+wasmTest('ChunkParser rejects non-array wantedPlayers with a clear message', async (t) => {
+  for (const value of ['76561198265366770', 42, {}]) {
+    await t.test(typeof value, () => {
+      assert.throws(
+        () =>
+          new wasm.ChunkParser(bytes, 'ticks', ticks, {
+            wantedProps: ['health'],
+            wantedPlayers: value
+          }),
+        { message: 'ChunkOpts.wantedPlayers must be an array of strings' }
+      )
+    })
+  }
+
+  assert.throws(
+    () =>
+      new wasm.ChunkParser(bytes, 'ticks', ticks, {
+        wantedProps: ['health'],
+        wantedPlayers: [42]
+      }),
+    { message: 'ChunkOpts.wantedPlayers entries must be strings' }
+  )
+})
+
+wasmTest('ChunkParser rejects non-array wantedProps before continuous decode', async (t) => {
+  for (const value of ['ducked', 42, {}]) {
+    await t.test(typeof value, () => {
+      assert.throws(
+        () => new wasm.ChunkParser(bytes, 'ticks', ticks, { wantedProps: value }),
+        { message: 'ChunkOpts.wantedProps must be an array of strings' }
+      )
+    })
+  }
+
+  assert.throws(
+    () => new wasm.ChunkParser(bytes, 'ticks', ticks, { wantedProps: [42] }),
+    { message: 'ChunkOpts.wantedProps entries must be strings' }
+  )
+})
+
+wasmTest('ChunkParser rejects non-array grenadeClasses', () => {
+  assert.throws(
+    () =>
+      new wasm.ChunkParser(bytes, 'grenades', null, {
+        wantedProps: [],
+        grenadeClasses: 'CInferno'
+      }),
+    { message: 'ChunkOpts.grenadeClasses must be an array of strings' }
+  )
+})
+
+wasmTest('ChunkParser rejects non-array wanted ticks', () => {
+  for (const value of ['100', {}, new Float64Array([100])]) {
+    assert.throws(
+      () => new wasm.ChunkParser(bytes, 'ticks', value, { wantedProps: ['health'] }),
+      { message: 'wantedTicks must be an Int32Array or an array of integers' }
+    )
+  }
+  assert.throws(
+    () => new wasm.ChunkParser(bytes, 'ticks', ['100'], { wantedProps: ['health'] }),
+    { message: 'wantedTicks entries must be numbers' }
+  )
+})
+
+wasmTest('ChunkParser rejects invalid modes and post-free use', () => {
+  assert.throws(() => new wasm.ChunkParser(bytes, 'bogus', null, { wantedProps: [] }), {
+    message: 'invalid mode "bogus": expected "ticks" or "grenades"'
+  })
+  for (const mode of [42, null, undefined, {}]) {
+    assert.throws(() => new wasm.ChunkParser(bytes, mode, null, { wantedProps: [] }), {
+      message: 'mode must be a string'
+    })
+  }
+
+  const parser = new wasm.ChunkParser(bytes, 'ticks', ticks, { wantedProps: ['health'] })
+  parser.free()
+  assert.throws(() => parser.nextChunk(), { message: 'ChunkParser has been freed' })
+  parser.free()
+})
+
+wasmTest('ChunkParser returns empty chunks when no rows match, then undefined', () => {
+  const parser = new wasm.ChunkParser(bytes, 'ticks', [-1], { wantedProps: ['health'] })
+  assert.ok(parser.chunkCount > 0)
+
+  const chunks = []
+  let chunk
+  while ((chunk = parser.nextChunk()) !== undefined) chunks.push(chunk)
+
+  assert.equal(chunks.length, parser.chunkCount)
+  assert.ok(chunks.every((rows) => Array.isArray(rows) && rows.length === 0))
+})
+
+wasmTest('ChunkParser rejects unknown opts fields and non-object opts', () => {
+  assert.throws(
+    () =>
+      new wasm.ChunkParser(bytes, 'ticks', ticks, {
+        wantedProps: ['health'],
+        bogus: true
+      }),
+    /unknown field `bogus`/
+  )
+  assert.throws(() => new wasm.ChunkParser(bytes, 'ticks', ticks, 'not-an-object'), {
+    message: 'ChunkOpts must be an object'
+  })
 })
 
 wasmTest('non-string list arguments return JsError, not a trap', () => {

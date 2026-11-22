@@ -20,13 +20,16 @@
 // `struct_of_arrays` and `prop_states` in both signatures and thread it into
 // `ParserInputs`, so the WASM argument order cannot drift from native.
 //
-// The array-typed tick parameters are guarded from both ends: `lib.rs` must
+// The array-typed list parameters are guarded from both ends: `lib.rs` must
 // carry a wasm-bindgen `unchecked_param_type` (or
-// `unchecked_optional_param_type`) on `wanted_props`, `wanted_players`, and
-// `prop_states`, and the generated declarations must type those parameters as
-// `string[]` / `ChunkPropState[]` (nullable and optional where the runtime
-// accepts `null`/`undefined`) instead of `any`. That pins the editor surface
-// to the runtime checks in `lib.rs`.
+// `unchecked_optional_param_type`) on every string list and tick list, and the
+// generated declarations must type those parameters as `string[]`,
+// `WantedPropState[]`, or `Int32Array | number[]` (nullable and optional where
+// the runtime accepts `null`/`undefined`) instead of `any`. That pins the
+// editor surface to the runtime checks in `lib.rs` for `parseTicks`,
+// `parseTickRange`, `parseEvent`, `parseEvents`, `parseGrenades`, and
+// `parseWeapons`. `ChunkPropState` must stay an alias of `WantedPropState` so
+// the chunk API and the native binding describe one prop-state concept.
 // Signatures and struct/function bodies are parsed structurally (balanced
 // parens/braces, comments and strings masked), so docs and substrings cannot
 // satisfy the guard.
@@ -330,15 +333,41 @@ const paramEntry = (params, name) => {
 }
 
 const arrayTypedParams = {
-  wanted_props: 'string[]',
-  wanted_players: 'string[]',
-  prop_states: 'ChunkPropState[]'
+  parseTicks: {
+    wanted_props: 'string[]',
+    wanted_ticks: 'Int32Array',
+    wanted_players: 'string[]',
+    prop_states: 'WantedPropState[]'
+  },
+  parseTickRange: {
+    wanted_props: 'string[]',
+    wanted_players: 'string[]',
+    prop_states: 'WantedPropState[]'
+  },
+  parseEvent: {
+    wanted_player_props: 'string[]',
+    wanted_other_props: 'string[]'
+  },
+  parseEvents: {
+    event_names: 'string[]',
+    wanted_player_props: 'string[]',
+    wanted_other_props: 'string[]'
+  },
+  parseGrenades: {
+    extra: 'string[]',
+    ticks: 'Int32Array',
+    grenade_classes: 'string[]'
+  },
+  parseWeapons: {
+    extra: 'string[]',
+    ticks: 'Int32Array'
+  }
 }
 
 const missingParamTypeAttrs = []
 const mismatchedTypedParams = []
-for (const name of propStateFunctions) {
-  for (const [param, expectedType] of Object.entries(arrayTypedParams)) {
+for (const [name, params] of Object.entries(arrayTypedParams)) {
+  for (const [param, expectedType] of Object.entries(params)) {
     const rustEntry = paramEntry(rustParameters(name), param)
     if (
       rustEntry === null ||
@@ -359,6 +388,24 @@ for (const name of propStateFunctions) {
     }
   }
 }
+
+// parseTicks can make wanted_props optional because every later parameter is
+// optional too. parseTickRange cannot: wasm-bindgen rejects an optional
+// parameter before required `tick_lo`/`tick_hi`, so its declaration stays
+// required-but-nullable. Both must type it as `string[]`, not `any`.
+const parseTicksWantedPropsOptional = (() => {
+  const entry = paramEntry(tsParameters('parseTicks'), 'wanted_props')
+  return entry !== null && /\bwanted_props\?\s*:/.test(entry)
+})()
+
+const tickRangeWantedPropsTyped = (() => {
+  const entry = paramEntry(tsParameters('parseTickRange'), 'wanted_props')
+  return entry !== null && /\bwanted_props\s*:\s*string\[\]/.test(entry)
+})()
+
+const chunkPropStateAliasOk =
+  /\bexport\s+interface\s+WantedPropState\s*\{/.test(maskedTypes) &&
+  /\bexport\s+type\s+ChunkPropState\s*=\s*WantedPropState\b/.test(maskedTypes)
 
 const functionBodyOf = (name) => {
   const match = new RegExp(`\\bfn\\s+${name}\\s*\\(`).exec(maskedLib)
@@ -462,7 +509,20 @@ if (missingParamTypeAttrs.length > 0) {
 }
 if (mismatchedTypedParams.length > 0) {
   console.error(
-    `check-wasm-exports: generated declarations do not type the tick parameters as arrays: ${mismatchedTypedParams.join(', ')}`
+    `check-wasm-exports: generated declarations do not type the list parameters correctly: ${mismatchedTypedParams.join(', ')}`
+  )
+}
+if (!parseTicksWantedPropsOptional) {
+  console.error('check-wasm-exports: parseTicks declarations must make wanted_props optional')
+}
+if (!tickRangeWantedPropsTyped) {
+  console.error(
+    'check-wasm-exports: parseTickRange declarations must type wanted_props as a required nullable string[]'
+  )
+}
+if (!chunkPropStateAliasOk) {
+  console.error(
+    'check-wasm-exports: declarations must define WantedPropState and alias ChunkPropState to it'
   )
 }
 if (!orderOk) {
@@ -490,6 +550,9 @@ if (
   missingPropStateParams.length > 0 ||
   missingParamTypeAttrs.length > 0 ||
   mismatchedTypedParams.length > 0 ||
+  !parseTicksWantedPropsOptional ||
+  !tickRangeWantedPropsTyped ||
+  !chunkPropStateAliasOk ||
   !orderOk ||
   missingChunkPropStates ||
   !hasDefaultInit

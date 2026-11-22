@@ -58,6 +58,8 @@ parseTicks(bytes, ['health'], null, null, false, false, [
 `ChunkParser` accepts the same filter through `opts.propStates` in ticks mode;
 grenades mode rejects a non-empty filter.
 
+Both bindings map a non-numeric `wantedPlayers` entry to steamid `0` (silent filter, no throw), and an inverted tick range (`tickLo > tickHi`) returns `[]`.
+
 Native and WASM use different error text for malformed `propStates` (napi
 validates the object shape, WASM parses it by hand), but both reject the same
 inputs.
