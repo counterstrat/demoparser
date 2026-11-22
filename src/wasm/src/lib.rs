@@ -127,6 +127,42 @@ fn wanted_strings(values: Option<Vec<JsValue>>, label: &str) -> Result<Vec<Strin
         .collect()
 }
 
+/// Validates the raw JS value before wasm-bindgen's `Vec<JsValue>` conversion
+/// can turn a non-array (for example a string, which is iterable) into a
+/// character list, matching native's `Vec<String>` argument rejection.
+fn wanted_strings_from_js(values: Option<JsValue>, label: &str) -> Result<Vec<String>, JsError> {
+    let Some(values) = values.filter(|value| !value.is_null() && !value.is_undefined()) else {
+        return Ok(vec![]);
+    };
+    if !js_sys::Array::is_array(&values) {
+        return Err(JsError::new(&format!("{} must be an array of strings", label)));
+    }
+    js_sys::Array::from(&values)
+        .iter()
+        .map(|value| {
+            value
+                .as_string()
+                .ok_or_else(|| JsError::new(&format!("{} entries must be strings", label)))
+        })
+        .collect()
+}
+
+fn to_js_value<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::new().serialize_missing_as_null(true))
+        .map_err(|e| JsError::new(&format!("{}", e)))
+}
+
+fn to_js_map_object<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
+    value
+        .serialize(
+            &serde_wasm_bindgen::Serializer::new()
+                .serialize_maps_as_objects(true)
+                .serialize_missing_as_null(true),
+        )
+        .map_err(|e| JsError::new(&format!("{}", e)))
+}
+
 #[wasm_bindgen]
 pub fn parseEvent(
     file: Vec<u8>,
@@ -325,19 +361,19 @@ pub fn listUpdatedFields(fileBytes: Vec<u8>) -> Result<JsValue, JsError> {
 #[wasm_bindgen]
 pub fn parseTicks(
     file: Vec<u8>,
-    wanted_props: Option<Vec<JsValue>>,
+    wanted_props: Option<JsValue>,
     wanted_ticks: Option<Vec<i32>>,
-    wanted_players: Option<Vec<JsValue>>,
+    wanted_players: Option<JsValue>,
     struct_of_arrays: Option<bool>,
     order_by_steamid: Option<bool>,
     prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
-    let wanted_props = wanted_strings(wanted_props, "wantedProps")?;
-    let wanted_players_u64 = wanted_strings(wanted_players, "wantedPlayers")?
+    let wanted_props = wanted_strings_from_js(wanted_props, "wantedProps")?;
+    let wanted_players_u64 = wanted_strings_from_js(wanted_players, "wantedPlayers")?
         .iter()
         .map(|x| x.parse::<u64>().unwrap_or(0))
         .collect();
-    let mut real_names = match rm_user_friendly_names(&wanted_props) {
+    let real_names = match rm_user_friendly_names(&wanted_props) {
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     };
@@ -400,13 +436,7 @@ pub fn parseTicks(
                 },
             );
         }
-        let serializer = serde_wasm_bindgen::Serializer::new()
-            .serialize_maps_as_objects(true)
-            .serialize_missing_as_null(true);
-        return match per_player.serialize(&serializer) {
-            Ok(s) => Ok(s),
-            Err(e) => Err(JsError::new(&format!("{}", e))),
-        };
+        return to_js_map_object(&per_player);
     }
 
     let helper = OutputSerdeHelperStruct {
@@ -420,18 +450,10 @@ pub fn parseTicks(
     };
 
     if is_soa {
-        let s = match serde_wasm_bindgen::to_value(&helper) {
-            Ok(s) => s,
-            Err(e) => return Err(JsError::new(&format!("{}", e))),
-        };
-        return Ok(s);
+        to_js_value(&helper)
     } else {
         let result = soa_to_aos(helper, false);
-        let s = match serde_wasm_bindgen::to_value(&result) {
-            Ok(s) => s,
-            Err(e) => return Err(JsError::new(&format!("{}", e))),
-        };
-        Ok(s)
+        to_js_value(&result)
     }
 }
 
@@ -442,16 +464,16 @@ pub fn parseTicks(
 #[wasm_bindgen]
 pub fn parseTickRange(
     file: Vec<u8>,
-    wanted_props: Option<Vec<JsValue>>,
+    wanted_props: Option<JsValue>,
     tick_lo: i32,
     tick_hi: i32,
-    wanted_players: Option<Vec<JsValue>>,
+    wanted_players: Option<JsValue>,
     struct_of_arrays: Option<bool>,
     order_by_steamid: Option<bool>,
     prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
-    let wanted_props = wanted_strings(wanted_props, "wantedProps")?;
-    let wanted_players_u64 = wanted_strings(wanted_players, "wantedPlayers")?
+    let wanted_props = wanted_strings_from_js(wanted_props, "wantedProps")?;
+    let wanted_players_u64 = wanted_strings_from_js(wanted_players, "wantedPlayers")?
         .iter()
         .map(|x| x.parse::<u64>().unwrap_or(0))
         .collect();
@@ -518,13 +540,7 @@ pub fn parseTickRange(
                 },
             );
         }
-        let serializer = serde_wasm_bindgen::Serializer::new()
-            .serialize_maps_as_objects(true)
-            .serialize_missing_as_null(true);
-        return match per_player.serialize(&serializer) {
-            Ok(s) => Ok(s),
-            Err(e) => Err(JsError::new(&format!("{}", e))),
-        };
+        return to_js_map_object(&per_player);
     }
 
     let helper = OutputSerdeHelperStruct {
@@ -538,18 +554,10 @@ pub fn parseTickRange(
     };
 
     if is_soa {
-        let s = match serde_wasm_bindgen::to_value(&helper) {
-            Ok(s) => s,
-            Err(e) => return Err(JsError::new(&format!("{}", e))),
-        };
-        return Ok(s);
+        to_js_value(&helper)
     } else {
         let result = soa_to_aos(helper, false);
-        let s = match serde_wasm_bindgen::to_value(&result) {
-            Ok(s) => s,
-            Err(e) => return Err(JsError::new(&format!("{}", e))),
-        };
-        Ok(s)
+        to_js_value(&result)
     }
 }
 /// extra: lets you add new fields to grenades. Use list_updated_fields for a full list.
@@ -734,8 +742,12 @@ const CHUNK_OPTS_TYPES: &'static str = r#"
 export interface ChunkOpts {
     /** Ticks mode: player prop friendly names (e.g. X, Y, Z). Grenades mode: extra prop names. */
     wantedProps: string[];
-    /** Ticks mode only: keep rows where every player matches every `{ prop, state }`. */
+    /** Ticks mode only: keep rows where every player matches every `{ prop, state }`. `null`, `undefined`, and `[]` mean no filter; a non-empty filter is rejected in grenades mode. */
     propStates?: ChunkPropState[];
+    /** Not supported by ChunkParser: rejected when non-empty. Use parseTicks instead. */
+    wantedPlayers?: string[];
+    /** Not supported by ChunkParser: `true` is rejected because streamed chunks cannot be ordered per player. Use parseTicks or parseTickRange. */
+    orderBySteamid?: boolean;
     /** Grenades mode only: non-projectile classes to emit (e.g. ["CInferno"]). */
     grenadeClasses?: string[];
     /** Grenades mode only: emit non-projectile grenades. Default true. */
@@ -760,6 +772,14 @@ struct ChunkOpts {
     /// extra prop names (e.g. "m_fireCount", "m_firePositions").
     #[serde(rename = "wantedProps")]
     wanted_props: Vec<String>,
+    /// Not supported: streaming cannot filter players across chunk boundaries
+    /// without buffering the whole demo. Rejected when non-empty.
+    #[serde(rename = "wantedPlayers")]
+    wanted_players: Option<Vec<String>>,
+    /// Not supported: streaming cannot order rows per player across chunk
+    /// boundaries. Rejected when `true`; `false` is a no-op.
+    #[serde(rename = "orderBySteamid")]
+    order_by_steamid: Option<bool>,
     /// Grenades mode only: non-projectile classes to emit (e.g. ["CInferno"]).
     #[serde(rename = "grenadeClasses")]
     grenade_classes: Option<Vec<String>>,
@@ -774,7 +794,7 @@ struct ChunkOpts {
     /// Ticks mode only: `{ prop, state }[]`, mirroring `parseTicks`.
     /// Declared so the accepted shape lives on this struct; the constructor
     /// reads it through `Reflect`, not serde, so BigInt states keep native
-    /// semantics. `null`/`undefined` mean no filter.
+    /// semantics. `null`/`undefined`/`[]` mean no filter.
     #[serde(rename = "propStates")]
     prop_states: Option<serde::de::IgnoredAny>,
 }
@@ -791,6 +811,14 @@ struct ChunkOpts {
 /// per-segment decode tracks those extra entity lifetimes differently from the
 /// continuous one-shot, so unfiltered row counts can differ from
 /// `parseGrenades` (every actual grenade class matches when filtered).
+///
+/// Limits versus one-shot parsing: props that need continuous decode
+/// (stateful props such as `ducked`, velocity-derived props such as
+/// `velocity_X`) are rejected, as are `wantedPlayers` and
+/// `orderBySteamid: true`, because neither can be applied across chunk
+/// boundaries. `propStates` is supported in ticks mode; in grenades mode
+/// `null`/`undefined`/`[]` mean no filter and a non-empty filter is
+/// rejected.
 ///
 /// One handle serves exactly one mode; the consumer creates one handle per
 /// pass, so one `Parser` + one preparse per handle is sufficient.
@@ -820,8 +848,12 @@ impl ChunkParser {
     /// `file`: whole demo bytes (copied once, shared by all chunks).
     /// `mode`: "ticks" or "grenades". `wanted_ticks`: ticks mode only, the
     /// exact wanted tick list (`None`/empty means all ticks); ignored for
-    /// grenades mode. `opts`: `ChunkOpts` (see the generated declarations);
-    /// `propStates` is ticks mode only and is rejected in grenades mode.
+    /// grenades mode. `opts`: `ChunkOpts` (see the generated declarations).
+    /// `propStates` is ticks mode only; `null`/`undefined`/`[]` mean no
+    /// filter in both modes, and a non-empty filter is rejected in grenades
+    /// mode. `wantedPlayers` (non-empty) and `orderBySteamid: true` are
+    /// rejected because a streamed result cannot filter or order across
+    /// chunks; use `parseTicks`/`parseTickRange` for those.
     #[wasm_bindgen(constructor)]
     pub fn new(file: Vec<u8>, mode: String, wanted_ticks: Option<Vec<i32>>, opts: JsValue) -> Result<ChunkParser, JsError> {
         let opts_value = opts.clone();
@@ -834,18 +866,32 @@ impl ChunkParser {
             "grenades" => true,
             other => return Err(JsError::new(&format!("invalid mode {:?}: expected \"ticks\" or \"grenades\"", other))),
         };
+        if opts.wanted_players.as_ref().is_some_and(|players| !players.is_empty()) {
+            return Err(JsError::new(
+                "ChunkParser does not support wantedPlayers; filter nextChunk rows by steamid or use parseTicks",
+            ));
+        }
+        if opts.order_by_steamid == Some(true) {
+            return Err(JsError::new(
+                "ChunkParser does not support orderBySteamid; use parseTicks or parseTickRange",
+            ));
+        }
+        let prop_states_value = match js_sys::Reflect::get(&opts_value, &JsValue::from_str("propStates")) {
+            Ok(value) => value,
+            Err(e) => return Err(JsError::new(&format!("invalid opts: {:?}", e))),
+        };
+        let prop_states_empty = prop_states_value.is_null()
+            || prop_states_value.is_undefined()
+            || (js_sys::Array::is_array(&prop_states_value)
+                && js_sys::Array::from(&prop_states_value).length() == 0);
         let has_prop_states = opts.prop_states.is_some();
         let (wanted_prop_states, prop_state_names) = if is_grenades {
-            if has_prop_states {
+            if has_prop_states && !prop_states_empty {
                 return Err(JsError::new("propStates is only supported in ticks mode; use parseGrenades for grenade state filtering"));
             }
             (vec![], vec![])
-        } else if has_prop_states {
-            let prop_states = match js_sys::Reflect::get(&opts_value, &JsValue::from_str("propStates")) {
-                Ok(value) => value,
-                Err(e) => return Err(JsError::new(&format!("invalid opts: {:?}", e))),
-            };
-            wanted_prop_states_from_js(Some(prop_states))?
+        } else if has_prop_states && !prop_states_empty {
+            wanted_prop_states_from_js(Some(prop_states_value))?
         } else {
             (vec![], vec![])
         };
@@ -1006,7 +1052,7 @@ impl ChunkParser {
             inner: segment.df.into(),
         };
         let result = soa_to_aos(helper, inner.skip_nones);
-        serde_wasm_bindgen::to_value(&result).map_err(|e| JsError::new(&format!("{}", e)))
+        to_js_value(&result)
     }
 
     /// Release the demo bytes, parser, and preparse snapshot promptly.

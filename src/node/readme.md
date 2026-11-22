@@ -55,8 +55,36 @@ parseTicks(bytes, ['health'], null, null, false, false, [
 ])
 ```
 
-`ChunkParser` ticks mode accepts the same filter through
-`opts.propStates`; grenades mode rejects it instead of silently ignoring it.
+### Signatures
+
+Full argument order, shown with native names. The first argument is the only
+semantic difference: path or `Buffer` vs demo bytes.
+
+```text
+parseTicks(pathOrBuf, wantedProps, wantedTicks?, wantedPlayers?, structOfArrays?, orderBySteamid?, propStates?)
+parseTickRange(pathOrBuf, wantedProps, tickLo, tickHi, wantedPlayers?, structOfArrays?, orderBySteamid?, propStates?)
+```
+
+WASM keeps the same positions but uses snake_case parameter names
+(`wanted_props`, `tick_lo`, `tick_hi`, ...). `orderBySteamid: true` groups
+rows per player for both functions; `structOfArrays: true` returns column
+arrays instead of rows (the ordered per-player result keeps the same grouping
+either way).
+
+`ChunkParser(file, mode, wantedTicks, opts)` is ticks or grenades mode and
+has deliberate limits:
+
+- `opts.wantedProps` is required.
+- `opts.propStates` works in ticks mode only. `null`, `undefined`, and `[]`
+  mean no filter in both modes; grenades mode rejects a non-empty filter
+  instead of silently ignoring it.
+- `opts.wantedPlayers` (non-empty) and `opts.orderBySteamid: true` are
+  rejected: a streamed result cannot filter or order across chunk boundaries.
+  Use `parseTicks` or `parseTickRange` for those.
+- Props that need continuous decode are rejected: cross-fullpacket state
+  (for example `ducked`) and velocity-derived props (for example
+  `velocity_X`) cannot carry state across segments. Use `parseTicks`.
+
 Native and WASM use different error text for malformed `propStates` (napi
 validates the object shape, WASM parses it by hand), but both reject the same
 inputs.

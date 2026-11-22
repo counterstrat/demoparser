@@ -72,8 +72,18 @@ if (missingFromEntry.length > 0 || missingFromTypes.length > 0) {
 }
 
 const paramsOf = (source, name) => {
-  const match = new RegExp(`export declare function ${name}\\(([^)]*)\\)`).exec(source)
-  return match?.[1] ?? null
+  const match = new RegExp(`export declare function ${name}\\s*\\(`).exec(source)
+  if (!match) return null
+  const open = match.index + match[0].length - 1
+  let depth = 0
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === '(') depth += 1
+    else if (source[index] === ')') {
+      depth -= 1
+      if (depth === 0) return source.slice(open + 1, index)
+    }
+  }
+  return null
 }
 
 const paramsInOrder = (params, names) => {
@@ -87,13 +97,40 @@ const paramsInOrder = (params, names) => {
   return true
 }
 
+const paramType = (params, name) => {
+  if (params === null) return null
+  const match = new RegExp(`\\b${name}\\??\\s*:\\s*([^,]+)`).exec(params)
+  return match?.[1]?.trim() ?? null
+}
+
 const orderedParams = ['structOfArrays', 'orderBySteamid', 'propStates']
-const orderOk = ['parseTicks', 'parseTickRange'].every((name) =>
+const orderedTypeChecks = [
+  ['structOfArrays', /^boolean\b/],
+  ['orderBySteamid', /^boolean\b/],
+  ['propStates', /^Array\s*<\s*WantedPropState\s*>/]
+]
+const orderedFunctions = ['parseTicks', 'parseTickRange']
+const orderOk = orderedFunctions.every((name) =>
   paramsInOrder(paramsOf(typesSource, name), orderedParams)
 )
 if (!orderOk) {
   console.error(
     'check-exports: parseTicks and parseTickRange declarations must keep structOfArrays, orderBySteamid, propStates in that order'
+  )
+  process.exit(1)
+}
+
+const missingTypes = []
+for (const name of orderedFunctions) {
+  const params = paramsOf(typesSource, name)
+  for (const [param, pattern] of orderedTypeChecks) {
+    const type = paramType(params, param)
+    if (type === null || !pattern.test(type)) missingTypes.push(`${name}.${param} (${type ?? 'missing'})`)
+  }
+}
+if (missingTypes.length > 0) {
+  console.error(
+    `check-exports: tick declarations have wrong or missing types: ${missingTypes.join(', ')}`
   )
   process.exit(1)
 }
@@ -105,6 +142,7 @@ if (binaries.length === 0) {
 }
 
 let failed = false
+let checked = 0
 for (const file of binaries) {
   let binding
   try {
@@ -115,6 +153,7 @@ for (const file of binaries) {
     console.log(`check-exports: skipping unloadable ${file} (${e.code || e.message})`)
     continue
   }
+  checked += 1
   const missing = exported.filter((name) => typeof binding[name] === 'undefined')
   if (missing.length > 0) {
     console.error(`check-exports: ${file} is missing exports: ${missing.join(', ')}`)
@@ -122,5 +161,12 @@ for (const file of binaries) {
   } else {
     console.log(`check-exports: ${file} OK (${exported.length} exports)`)
   }
+}
+
+if (checked === 0) {
+  console.error(
+    'check-exports: none of the local `.node` artifacts loaded; build for this platform with `npm run build:native`'
+  )
+  process.exit(2)
 }
 process.exit(failed ? 1 : 0)

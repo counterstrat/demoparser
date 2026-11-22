@@ -68,6 +68,10 @@ if (wasmFiles.length === 0) {
   process.exit(2)
 }
 
+// wasm-bindgen initialization glue, not part of `src/wasm/src/lib.rs`. Keep
+// this allowlist scoped to names wasm-bindgen itself emits; any other extra
+// export must come from a `lib.rs` declaration. Update this list only when a
+// wasm-bindgen upgrade renames or drops its init entry points.
 const glueNames = new Set(['initSync', 'default', '__wbg_init'])
 
 const declaredNames = (source) => {
@@ -331,7 +335,9 @@ const chunkOptsSource = chunkOptsRange
   ? libSrc.slice(chunkOptsRange.start, chunkOptsRange.end)
   : ''
 const chunkOptsHasPropStates =
-  /#\[serde\([\s\S]*?rename\s*=\s*"propStates"[\s\S]*?\)\]\s*prop_states\s*:/.test(chunkOptsSource)
+  /#\[serde\([\s\S]*?rename\s*=\s*"propStates"[\s\S]*?\)\]\s*prop_states\s*:\s*Option\s*<\s*serde\s*::\s*de\s*::\s*IgnoredAny\s*>/.test(
+    chunkOptsSource
+  )
 
 const chunkImplRange = bodyAfter(maskedLib, /\bimpl\s+ChunkParser\s*\{/)
 const chunkImplMasked = chunkImplRange

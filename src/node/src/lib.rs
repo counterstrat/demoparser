@@ -620,7 +620,7 @@ pub fn parse_ticks(
   order_by_steamid: Option<bool>,
   prop_states: Option<Vec<WantedPropState>>,
 ) -> napi::Result<Value> {
-  let mut real_names = match rm_user_friendly_names(&wanted_props) {
+  let real_names = match rm_user_friendly_names(&wanted_props) {
     Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
   };
@@ -675,13 +675,9 @@ pub fn parse_ticks(
 
   let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
   let output = parse_demo(bytes, &mut parser)?;
-  real_names.push("tick".to_owned());
-  real_names.push("steamid".to_owned());
-  real_names.push("name".to_owned());
 
   let mut prop_infos = output.prop_controller.prop_infos.clone();
   prop_infos.sort_by_key(|x| x.prop_name.clone());
-  real_names.sort();
 
   let helper = OutputSerdeHelperStruct {
     prop_infos: prop_infos.clone(),
@@ -738,7 +734,7 @@ pub fn parse_tick_range(
   order_by_steamid: Option<bool>,
   prop_states: Option<Vec<WantedPropState>>,
 ) -> napi::Result<Value> {
-  let mut real_names = match rm_user_friendly_names(&wanted_props) {
+  let real_names = match rm_user_friendly_names(&wanted_props) {
     Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
   };
@@ -810,13 +806,9 @@ pub fn parse_tick_range(
       }
     }
   };
-  real_names.push("tick".to_owned());
-  real_names.push("steamid".to_owned());
-  real_names.push("name".to_owned());
 
   let mut prop_infos = output.prop_controller.prop_infos.clone();
   prop_infos.sort_by_key(|x| x.prop_name.clone());
-  real_names.sort();
 
   let helper = OutputSerdeHelperStruct {
     prop_infos: prop_infos.clone(),
