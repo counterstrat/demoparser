@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 # Tracks the MSRV required by polars 0.55.2, the Python binding's main dependency.
 rust-version = "1.95"
 

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "counterstrat-demoparser"
-version = "0.1.0"
+version = "0.2.0"
 description = "Fast Counter-Strike 2 demo parser with a pandas DataFrame API"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { text = "MIT" }

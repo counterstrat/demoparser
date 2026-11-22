@@ -405,7 +405,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "counterstrat-demoparser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "bit_reverse",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "counterstrat-demoparser-python"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "counterstrat-demoparser",
@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "counterstrat-demoparser-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "counterstrat-demoparser",
  "csgoproto",
@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "counterstrat_demoparser"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "counterstrat-demoparser",
@@ -577,7 +577,7 @@ dependencies = [
 
 [[package]]
 name = "csgoproto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "git-mirror",
  "phf 0.11.3",
@@ -915,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "git-mirror"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "glob"
