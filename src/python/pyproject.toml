@@ -11,7 +11,7 @@ license = { text = "MIT" }
 authors = [{ name = "CounterStrat" }]
 keywords = ["cs2", "counter-strike", "demo", "parser", "pandas", "replay"]
 requires-python = ">=3.11"
-dependencies = ["pandas>=3.1", "numpy>=2.0", "polars>=1.44", "pyarrow>=26"]
+dependencies = ["pandas>=3.1", "numpy>=2.4.6", "polars>=1.44", "pyarrow>=26"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
