@@ -9,7 +9,10 @@ use parser::parse_demo::ParsingMode::ForceSingleThreaded;
 use parser::second_pass::parser_settings::create_huffman_lookup_table;
 use parser::second_pass::variants::soa_to_aos;
 use parser::second_pass::variants::OutputSerdeHelperStruct;
+use parser::second_pass::variants::Variant;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::convert::TryFrom;
 use std::iter::FromIterator;
 use std::result::Result;
 use std::sync::Arc;
@@ -22,6 +25,94 @@ use wasm_bindgen::prelude::*;
 /// entries) is shared by every handle in this wasm instance instead of
 /// leaking one per handle.
 static HUFFMAN_TABLE: OnceLock<Vec<(u8, u8)>> = OnceLock::new();
+
+/// Parsed by hand rather than through `serde_wasm_bindgen`: serde's
+/// `deserialize_any` cannot tell a JS number from a small BigInt, and native
+/// maps those to different `Variant`s. Returns the real-name states plus the
+/// `(real, user-friendly)` pairs to add to `real_name_to_og_name`.
+fn wanted_prop_states_from_js(
+    prop_states: Option<JsValue>,
+) -> Result<(Vec<(String, Variant)>, Vec<(String, String)>), JsError> {
+    let Some(prop_states) = prop_states.filter(|value| !value.is_null() && !value.is_undefined()) else {
+        return Ok((vec![], vec![]));
+    };
+    if !js_sys::Array::is_array(&prop_states) {
+        return Err(JsError::new("propStates must be an array of { prop, state } objects"));
+    }
+    let mut parsed: Vec<(String, Variant)> = vec![];
+    for entry in js_sys::Array::from(&prop_states).iter() {
+        if !entry.is_object() {
+            return Err(JsError::new("propStates entries must be { prop, state } objects"));
+        }
+        let prop = js_sys::Reflect::get(&entry, &JsValue::from_str("prop"))
+            .map_err(|_| JsError::new("propStates entries need a string `prop`"))?;
+        let prop = prop
+            .as_string()
+            .ok_or_else(|| JsError::new("propStates entries need a string `prop`"))?;
+        let state = js_sys::Reflect::get(&entry, &JsValue::from_str("state"))
+            .map_err(|_| JsError::new("propStates entries need a `state`"))?;
+        parsed.push((prop, prop_state_variant(&state)?));
+    }
+
+    let mut seen_props = HashSet::new();
+    for (prop, _) in &parsed {
+        if !seen_props.insert(prop.clone()) {
+            return Err(JsError::new(&format!("Duplicate prop state for `{}`", prop)));
+        }
+    }
+    let user_friendly_names: Vec<String> = parsed.iter().map(|(prop, _)| prop.clone()).collect();
+    let real_names =
+        rm_user_friendly_names(&user_friendly_names).map_err(|e| JsError::new(&format!("{}", e)))?;
+    let mut seen_real_names = HashSet::new();
+    for real_name in &real_names {
+        if !seen_real_names.insert(real_name.clone()) {
+            return Err(JsError::new(&format!(
+                "Multiple prop states resolve to the same real name `{}`",
+                real_name
+            )));
+        }
+    }
+    let wanted_prop_states = parsed
+        .into_iter()
+        .zip(&real_names)
+        .map(|((_, state), real_name)| (real_name.clone(), state))
+        .collect();
+    let name_pairs = real_names.into_iter().zip(user_friendly_names).collect();
+    Ok((wanted_prop_states, name_pairs))
+}
+
+fn prop_state_variant(state: &JsValue) -> Result<Variant, JsError> {
+    if let Some(value) = state.as_bool() {
+        return Ok(Variant::Bool(value));
+    }
+    if let Some(value) = state.as_string() {
+        return Ok(Variant::String(value));
+    }
+    if let Some(number) = state.as_f64() {
+        if !number.is_finite() {
+            return Err(JsError::new("Prop state numbers must be finite"));
+        }
+        if number.fract() == 0.0 {
+            if number >= i32::MIN as f64 && number <= i32::MAX as f64 {
+                return Ok(Variant::I32(number as i32));
+            }
+            if number >= 0.0 && number <= u32::MAX as f64 {
+                return Ok(Variant::U32(number as u32));
+            }
+            return Err(JsError::new("Integer prop states above u32::MAX must be passed as BigInt"));
+        }
+        return Ok(Variant::F32(number as f32));
+    }
+    if state.is_bigint() {
+        return match u64::try_from(state.clone()) {
+            Ok(value) => Ok(Variant::U64(value)),
+            Err(_) => Err(JsError::new("Unsupported number type")),
+        };
+    }
+    Err(JsError::new(
+        "Expected a boolean, string, number, or bigint for a prop state",
+    ))
+}
 
 #[wasm_bindgen]
 pub fn parseEvent(
@@ -240,6 +331,7 @@ pub fn parseTicks(
     wanted_ticks: Option<Vec<i32>>,
     wanted_players: Option<Vec<JsValue>>,
     struct_of_arrays: Option<bool>,
+    prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
     let wanted_props = match wanted_props {
         Some(p) => p.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>(),
@@ -256,9 +348,13 @@ pub fn parseTicks(
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     };
+    let (wanted_prop_states, prop_state_names) = wanted_prop_states_from_js(prop_states)?;
     let arc_huf = Arc::new(create_huffman_lookup_table());
     let mut real_name_to_og_name = HashMap::default();
     for (real_name, user_friendly_name) in real_names.iter().zip(&wanted_props) {
+        real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
+    }
+    for (real_name, user_friendly_name) in &prop_state_names {
         real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
     }
     let wanted_ticks = match wanted_ticks {
@@ -280,7 +376,7 @@ pub fn parseTicks(
         only_convars: false,
         huffman_lookup_table: &arc_huf.clone(),
         order_by_steamid: false,
-        wanted_prop_states: HashMap::default().into(),
+        wanted_prop_states: wanted_prop_states.into_iter().collect(),
         fallback_bytes: None,
         parse_grenades: false,
         parse_weapons: false,
@@ -334,6 +430,7 @@ pub fn parseTickRange(
     tick_hi: i32,
     wanted_players: Option<Vec<JsValue>>,
     struct_of_arrays: Option<bool>,
+    prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
     let wanted_props = match wanted_props {
         Some(p) => p.iter().map(|s| s.as_string().unwrap()).collect::<Vec<_>>(),
@@ -350,9 +447,13 @@ pub fn parseTickRange(
         Ok(names) => names,
         Err(e) => return Err(JsError::new(&format!("{}", e))),
     };
+    let (wanted_prop_states, prop_state_names) = wanted_prop_states_from_js(prop_states)?;
     let arc_huf = Arc::new(create_huffman_lookup_table());
     let mut real_name_to_og_name = HashMap::default();
     for (real_name, user_friendly_name) in real_names.iter().zip(&wanted_props) {
+        real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
+    }
+    for (real_name, user_friendly_name) in &prop_state_names {
         real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
     }
     let settings = ParserInputs {
@@ -370,7 +471,7 @@ pub fn parseTickRange(
         only_convars: false,
         huffman_lookup_table: &arc_huf.clone(),
         order_by_steamid: false,
-        wanted_prop_states: HashMap::default().into(),
+        wanted_prop_states: wanted_prop_states.into_iter().collect(),
         fallback_bytes: None,
         parse_grenades: false,
         parse_weapons: false,
@@ -594,7 +695,9 @@ pub fn parseHeader(file: Vec<u8>) -> Result<JsValue, JsError> {
 }
 
 /// Options for `ChunkParser` (the `opts` constructor argument), deserialized
-/// from JS via `serde_wasm_bindgen::from_value`.
+/// from JS via `serde_wasm_bindgen::from_value`. Ticks mode also accepts
+/// `propStates` (`{ prop, state }[]`, mirroring `parseTicks`); it is read
+/// separately from the same object so BigInt states keep native semantics.
 #[derive(serde::Deserialize)]
 struct ChunkOpts {
     /// Ticks mode: player prop friendly names (e.g. X, Y, Z). Grenades mode:
@@ -655,10 +758,11 @@ impl ChunkParser {
     /// `file`: whole demo bytes (copied once, shared by all chunks).
     /// `mode`: "ticks" or "grenades". `wanted_ticks`: ticks mode only, the
     /// exact wanted tick list (`None`/empty means all ticks); ignored for
-    /// grenades mode. `opts`: `{ wantedProps, grenadeClasses?,
-    /// nonProjectileGrenades?, skipNones? }`.
+    /// grenades mode. `opts`: `{ wantedProps, propStates?, grenadeClasses?,
+    /// nonProjectileGrenades?, skipNones? }`; `propStates` is ticks mode only.
     #[wasm_bindgen(constructor)]
     pub fn new(file: Vec<u8>, mode: String, wanted_ticks: Option<Vec<i32>>, opts: JsValue) -> Result<ChunkParser, JsError> {
+        let opts_value = opts.clone();
         let opts: ChunkOpts = match serde_wasm_bindgen::from_value(opts) {
             Ok(opts) => opts,
             Err(e) => return Err(JsError::new(&format!("invalid opts: {}", e))),
@@ -667,6 +771,15 @@ impl ChunkParser {
             "ticks" => false,
             "grenades" => true,
             other => return Err(JsError::new(&format!("invalid mode {:?}: expected \"ticks\" or \"grenades\"", other))),
+        };
+        let (wanted_prop_states, prop_state_names) = if is_grenades {
+            (vec![], vec![])
+        } else {
+            let prop_states = match js_sys::Reflect::get(&opts_value, &JsValue::from_str("propStates")) {
+                Ok(value) => value,
+                Err(e) => return Err(JsError::new(&format!("invalid opts: {:?}", e))),
+            };
+            wanted_prop_states_from_js(Some(prop_states))?
         };
         let real_names = match rm_user_friendly_names(&opts.wanted_props) {
             Ok(names) => names,
@@ -688,6 +801,9 @@ impl ChunkParser {
         }
         let mut real_name_to_og_name = HashMap::default();
         for (real_name, user_friendly_name) in real_names.iter().zip(&opts.wanted_props) {
+            real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
+        }
+        for (real_name, user_friendly_name) in &prop_state_names {
             real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
         }
         // Shared `'static` table (see `HUFFMAN_TABLE`): no per-handle leak,
@@ -734,7 +850,7 @@ impl ChunkParser {
                 only_convars: false,
                 huffman_lookup_table: huf,
                 order_by_steamid: false,
-                wanted_prop_states: HashMap::default().into(),
+                wanted_prop_states: wanted_prop_states.into_iter().collect(),
                 fallback_bytes: None,
                 parse_grenades: false,
                 parse_weapons: false,

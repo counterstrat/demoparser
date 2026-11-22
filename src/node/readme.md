@@ -32,14 +32,12 @@ import init, { parseEvent, parseTicks } from '@counterstrat/demoparser/wasm';
 await init();
 ```
 
-The WASM binding does not expose `propStates` (core supports it; the binding is
-not threaded through).
+## Prop states
 
-## Prop states (native only)
-
-`parseTicks` accepts `{ prop, state }` objects. `state` may be a boolean,
-string, finite number, or BigInt; integers above `u32::MAX` (4294967295) must
-be BigInt. A tick is kept only when every player matches every wanted state.
+`parseTicks` and `parseTickRange` accept `{ prop, state }` objects in both the
+native and WASM bindings. `state` may be a boolean, string, finite number, or
+BigInt; integers above `u32::MAX` (4294967295) must be BigInt. A tick is kept
+only when every player matches every wanted state.
 
 ## Building from source
 

@@ -11,6 +11,11 @@
 // and the default export are wasm-bindgen initialization glue and are allowed
 // on top of the API set.
 //
+// The prop-state surface is also guarded: `parseTicks` and `parseTickRange`
+// must keep their `prop_states` parameter in both `lib.rs` and the generated
+// declarations, and the `ChunkParser` opts docs must keep `propStates`, so a
+// stale build cannot silently drop the filter.
+//
 // Run: `node check-wasm-exports.js` (from `src/node/`). Exit non-zero
 // lists the missing names.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -74,7 +79,8 @@ const declaredNames = (source) => {
 }
 
 const runtimeNames = declaredNames(readFileSync(join(dir, wasmExport.default), 'utf8'))
-const typeNames = declaredNames(readFileSync(typesEntry, 'utf8'))
+const typesSource = readFileSync(typesEntry, 'utf8')
+const typeNames = declaredNames(typesSource)
 
 const jsNameOf = (attrs, rustName) => {
   const match = attrs.match(/js_name\s*=\s*(?:"([^"]+)"|([A-Za-z_$][\w$]*))/)
@@ -143,6 +149,20 @@ const missingFromAdapter = wanted.filter((name) => !adapterApiNames.includes(nam
 const extraInAdapter = adapterApiNames.filter((name) => !wanted.includes(name))
 const hasDefaultInit = /export\s+default\s+wasm\.default/.test(wasmNodeSource)
 
+const rustParameters = (name) => {
+  const signature = new RegExp(`fn\\s+${name}\\s*\\(([\\s\\S]*?)\\)\\s*->`).exec(libSrc)
+  return signature?.[1] ?? ''
+}
+const tsParameters = (name) => {
+  const signature = new RegExp(`export function ${name}\\(([^)]*)\\)`).exec(typesSource)
+  return signature?.[1] ?? ''
+}
+const propStateFunctions = ['parseTicks', 'parseTickRange']
+const missingPropStateParams = propStateFunctions.filter(
+  (name) => !/\bprop_states\s*:/.test(rustParameters(name)) || !/\bprop_states\b/.test(tsParameters(name))
+)
+const missingChunkPropStates = !/propStates/.test(libSrc) || !/propStates/.test(typesSource)
+
 if (missingRuntime.length > 0) {
   console.error(`check-wasm-exports: wasm JS glue is missing exports: ${missingRuntime.join(', ')}`)
 }
@@ -161,6 +181,14 @@ if (missingFromAdapter.length > 0) {
 if (extraInAdapter.length > 0) {
   console.error(`check-wasm-exports: wasm-node.js exports unknown names: ${extraInAdapter.join(', ')}`)
 }
+if (missingPropStateParams.length > 0) {
+  console.error(
+    `check-wasm-exports: propStates is not exposed on: ${missingPropStateParams.join(', ')}`
+  )
+}
+if (missingChunkPropStates) {
+  console.error('check-wasm-exports: ChunkParser opts is missing the propStates option')
+}
 if (!hasDefaultInit) {
   console.error('check-wasm-exports: wasm-node.js must re-export the default init function only')
 }
@@ -171,6 +199,8 @@ if (
   extraTypes.length > 0 ||
   missingFromAdapter.length > 0 ||
   extraInAdapter.length > 0 ||
+  missingPropStateParams.length > 0 ||
+  missingChunkPropStates ||
   !hasDefaultInit
 ) {
   console.error('check-wasm-exports: rebuild with `npm run build:wasm` or fix wasm-node.js')

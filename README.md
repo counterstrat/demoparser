@@ -32,7 +32,7 @@ let ticks_json = parseTicks("path_to_demo.dem", ["X", "Y"])
 ```
 
 #### WASM (Node, browsers, and edge runtimes)
-The `./wasm` subpath takes the demo bytes instead of a file path, so load or fetch the demo yourself. It has no Node builtins and never touches the filesystem. The WASM build does not support `propStates`; that filter is native-only.
+The `./wasm` subpath takes the demo bytes instead of a file path, so load or fetch the demo yourself. It has no Node builtins and never touches the filesystem.
 
 In Node the wasm module initializes itself, so the import is the same as any other module:
 
