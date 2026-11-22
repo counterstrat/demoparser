@@ -121,7 +121,17 @@ pub fn needs_velocity(props: &[String]) -> bool {
     false
 }
 
-/// Names from `wanted_player_props` that require a continuous decode and
+/// Every prop name that participates in filtering: player props plus
+/// `propStates` keys. Stateful props can arrive only as prop states, so
+/// continuous-decode and threading decisions must see both lists.
+pub fn filter_prop_names(inputs: &ParserInputs<'_>) -> Vec<String> {
+    let mut names = inputs.wanted_player_props.clone();
+    names.extend(inputs.wanted_prop_states.keys().cloned());
+    names
+}
+
+/// Names from the active filter props (`wanted_player_props` plus
+/// `propStates` keys) that require a continuous decode and
 /// therefore cannot be served per-segment: props carrying
 /// cross-fullpacket state (`NON_MULTITHREADABLE_PROPS` — damage counters,
 /// duck state, ...) plus velocity-derived props (their two-sample
@@ -140,13 +150,14 @@ pub fn continuous_decode_required(props: &[String]) -> Vec<String> {
 
 impl<'a> FirstPassParser<'a> {
     pub fn new(inputs: &'a ParserInputs<'a>) -> Self {
+        let filter_props = filter_prop_names(inputs);
         FirstPassParser {
             fallback_bytes: inputs.fallback_bytes.as_deref(),
             order_by_steamid: inputs.order_by_steamid,
             sendtable_message: None,
-            needs_velocity: needs_velocity(&inputs.wanted_player_props),
+            needs_velocity: needs_velocity(&filter_props),
             added_temp_props: vec![],
-            is_multithreadable: check_multithreadability(&inputs.wanted_player_props),
+            is_multithreadable: check_multithreadability(&filter_props),
             stringtable_players: BTreeMap::default(),
             ge_list_set: false,
             cls_by_id_set: false,

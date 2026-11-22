@@ -7,7 +7,14 @@
 // dependency packages, so this guard checks whichever local `.node` artifacts
 // a build left in this directory (skipping artifacts for other platforms).
 // This check fails if the ESM entry, its declarations, and a local binary
-// disagree, or if the entry falls back to CommonJS.
+// disagree, or if the entry falls back to CommonJS. The tick declarations must
+// keep `structOfArrays`, `orderBySteamid`, `propStates` in that order for both
+// `parseTicks` and `parseTickRange`, matching the WASM signatures.
+//
+// List filters are optional in both bindings: this guard requires the native
+// declarations for `wantedProps`/`extra`/`playerExtra`/`otherExtra`/
+// `eventNames`/`grenadeClasses` to stay `Array<string>` and nullable
+// (`null`/`undefined` mean "no filter"), mirroring the WASM types.
 //
 // Run: `node check-exports.js` (from `src/node/`). Exit non-zero lists the
 // missing names per file or binary.
@@ -55,7 +62,8 @@ if (!existsSync(join(dir, 'index.d.ts'))) {
   process.exit(2)
 }
 
-const declared = declaredNames(readFileSync(join(dir, 'index.d.ts'), 'utf8'))
+const typesSource = readFileSync(join(dir, 'index.d.ts'), 'utf8')
+const declared = declaredNames(typesSource)
 const missingFromEntry = declared.filter((name) => !exported.includes(name))
 const missingFromTypes = exported.filter((name) => !declared.includes(name))
 if (missingFromEntry.length > 0 || missingFromTypes.length > 0) {
@@ -68,6 +76,100 @@ if (missingFromEntry.length > 0 || missingFromTypes.length > 0) {
   process.exit(1)
 }
 
+const paramsOf = (source, name) => {
+  const match = new RegExp(`export declare function ${name}\\s*\\(`).exec(source)
+  if (!match) return null
+  const open = match.index + match[0].length - 1
+  let depth = 0
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === '(') depth += 1
+    else if (source[index] === ')') {
+      depth -= 1
+      if (depth === 0) return source.slice(open + 1, index)
+    }
+  }
+  return null
+}
+
+const paramsInOrder = (params, names) => {
+  if (params === null) return false
+  let cursor = 0
+  for (const name of names) {
+    const match = new RegExp(`\\b${name}\\??:`).exec(params.slice(cursor))
+    if (!match) return false
+    cursor += match.index + match[0].length
+  }
+  return true
+}
+
+const paramType = (params, name) => {
+  if (params === null) return null
+  const match = new RegExp(`\\b${name}\\??\\s*:\\s*([^,]+)`).exec(params)
+  return match?.[1]?.trim() ?? null
+}
+
+const orderedParams = ['structOfArrays', 'orderBySteamid', 'propStates']
+const orderedTypeChecks = [
+  ['structOfArrays', /^boolean\b/],
+  ['orderBySteamid', /^boolean\b/],
+  ['propStates', /^Array\s*<\s*WantedPropState\s*>/]
+]
+const orderedFunctions = ['parseTicks', 'parseTickRange']
+const orderOk = orderedFunctions.every((name) =>
+  paramsInOrder(paramsOf(typesSource, name), orderedParams)
+)
+if (!orderOk) {
+  console.error(
+    'check-exports: parseTicks and parseTickRange declarations must keep structOfArrays, orderBySteamid, propStates in that order'
+  )
+  process.exit(1)
+}
+
+const missingTypes = []
+for (const name of orderedFunctions) {
+  const params = paramsOf(typesSource, name)
+  for (const [param, pattern] of orderedTypeChecks) {
+    const type = paramType(params, param)
+    if (type === null || !pattern.test(type)) missingTypes.push(`${name}.${param} (${type ?? 'missing'})`)
+  }
+}
+if (missingTypes.length > 0) {
+  console.error(
+    `check-exports: tick declarations have wrong or missing types: ${missingTypes.join(', ')}`
+  )
+  process.exit(1)
+}
+
+const nullableListParams = {
+  parseTicks: ['wantedProps'],
+  parseTickRange: ['wantedProps'],
+  parseEvent: ['playerExtra', 'otherExtra'],
+  parseEvents: ['eventNames', 'playerExtra', 'otherExtra'],
+  parseGrenades: ['extra', 'grenadeClasses'],
+  parseWeapons: ['extra']
+}
+const badListTypes = []
+for (const [name, params] of Object.entries(nullableListParams)) {
+  const declaration = paramsOf(typesSource, name)
+  for (const param of params) {
+    const type = paramType(declaration, param)
+    if (
+      type === null ||
+      !/^Array\s*<\s*string\s*>/.test(type) ||
+      !/\bnull\b/.test(type) ||
+      !/\bundefined\b/.test(type)
+    ) {
+      badListTypes.push(`${name}.${param} (${type ?? 'missing'})`)
+    }
+  }
+}
+if (badListTypes.length > 0) {
+  console.error(
+    `check-exports: list filter declarations must be nullable Array<string>: ${badListTypes.join(', ')}`
+  )
+  process.exit(1)
+}
+
 const binaries = readdirSync(dir).filter((f) => f.endsWith('.node'))
 if (binaries.length === 0) {
   console.error('check-exports: no local `.node` artifacts found; run `npm run build`')
@@ -75,6 +177,7 @@ if (binaries.length === 0) {
 }
 
 let failed = false
+let checked = 0
 for (const file of binaries) {
   let binding
   try {
@@ -85,6 +188,7 @@ for (const file of binaries) {
     console.log(`check-exports: skipping unloadable ${file} (${e.code || e.message})`)
     continue
   }
+  checked += 1
   const missing = exported.filter((name) => typeof binding[name] === 'undefined')
   if (missing.length > 0) {
     console.error(`check-exports: ${file} is missing exports: ${missing.join(', ')}`)
@@ -92,5 +196,12 @@ for (const file of binaries) {
   } else {
     console.log(`check-exports: ${file} OK (${exported.length} exports)`)
   }
+}
+
+if (checked === 0) {
+  console.error(
+    'check-exports: none of the local `.node` artifacts loaded; build for this platform with `npm run build:native`'
+  )
+  process.exit(2)
 }
 process.exit(failed ? 1 : 0)

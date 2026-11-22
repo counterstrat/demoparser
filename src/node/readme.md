@@ -32,14 +32,33 @@ import init, { parseEvent, parseTicks } from '@counterstrat/demoparser/wasm';
 await init();
 ```
 
-The WASM binding does not expose `propStates` (core supports it; the binding is
-not threaded through).
+## Prop states
 
-## Prop states (native only)
+`parseTicks` and `parseTickRange` accept `{ prop, state }` objects in both the
+native and WASM bindings. `state` may be a boolean, string, finite number, or
+BigInt; integers above `u32::MAX` (4294967295) must be BigInt. A tick is kept
+only when every player matches every wanted state.
 
-`parseTicks` accepts `{ prop, state }` objects. `state` may be a boolean,
-string, finite number, or BigInt; integers above `u32::MAX` (4294967295) must
-be BigInt. A tick is kept only when every player matches every wanted state.
+Same argument order in both bindings; only the first argument
+differs (path/Buffer vs bytes).
+
+```JavaScript
+// Native: path or Buffer.
+parseTicks('demo.dem', ['health'], null, null, false, false, [
+  { prop: 'health', state: 100 }
+])
+
+// WASM: demo bytes.
+parseTicks(bytes, ['health'], null, null, false, false, [
+  { prop: 'health', state: 100 }
+])
+```
+
+- List filters accept `null`, `undefined`, or `[]` as "no filter" in both bindings.
+- WASM demo bytes must be a `Uint8Array`; a Node `Buffer` is one.
+- `wantedTicks` is `number[]`, with `ToInt32` semantics in both bindings.
+- `parseEvent` requires `eventName` and takes optional `gameEventListBytes`;
+  `ChunkParser` takes `propStates` in ticks mode only.
 
 ## Building from source
 

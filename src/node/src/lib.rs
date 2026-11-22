@@ -225,10 +225,7 @@ pub fn parse_grenades(
 ) -> napi::Result<Value> {
   let bytes = resolve_byte_type(path_or_buf)?;
   let huf = create_huffman_lookup_table();
-  let mut extra_props = match extra {
-    Some(p) => p,
-    None => vec![],
-  };
+  let extra_props = extra.unwrap_or_default();
   let real_extra_props = match rm_user_friendly_names(&extra_props) {
     Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
@@ -266,13 +263,8 @@ pub fn parse_grenades(
   let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
   let output = parse_demo(bytes, &mut parser)?;
 
-  extra_props.push("tick".to_owned());
-  extra_props.push("steamid".to_owned());
-  extra_props.push("name".to_owned());
-
   let mut prop_infos = output.prop_controller.prop_infos.clone();
   prop_infos.sort_by_key(|x| x.prop_name.clone());
-  extra_props.sort();
 
   let helper = OutputSerdeHelperStruct {
     prop_infos: prop_infos.clone(),
@@ -298,10 +290,7 @@ pub fn parse_weapons(
 ) -> napi::Result<Value> {
   let bytes = resolve_byte_type(path_or_buf)?;
   let huf = create_huffman_lookup_table();
-  let mut extra_props = match extra {
-    Some(p) => p,
-    None => vec![],
-  };
+  let extra_props = extra.unwrap_or_default();
   let real_extra_props = match rm_user_friendly_names(&extra_props) {
     Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
@@ -337,13 +326,8 @@ pub fn parse_weapons(
   let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
   let output = parse_demo(bytes, &mut parser)?;
 
-  extra_props.push("tick".to_owned());
-  extra_props.push("steamid".to_owned());
-  extra_props.push("name".to_owned());
-
   let mut prop_infos = output.prop_controller.prop_infos.clone();
   prop_infos.sort_by_key(|x| x.prop_name.clone());
-  extra_props.sort();
 
   let helper = OutputSerdeHelperStruct {
     prop_infos: prop_infos.clone(),
@@ -553,24 +537,11 @@ pub fn parse_events(
   Ok(s)
 }
 
-#[napi]
-pub fn parse_ticks(
-  path_or_buf: Either<String, Buffer>,
-  wanted_props: Vec<String>,
-  wanted_ticks: Option<Vec<i32>>,
-  wanted_players: Option<Vec<String>>,
-  struct_of_arrays: Option<bool>,
-  order_by_steamid: Option<bool>,
+type ResolvedPropStates = (AHashMap<String, Variant>, Vec<(String, String)>);
+
+fn resolve_prop_states(
   prop_states: Option<Vec<WantedPropState>>,
-) -> napi::Result<Value> {
-  let mut real_names = match rm_user_friendly_names(&wanted_props) {
-    Ok(names) => names,
-    Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
-  };
-  let wanted_players_u64 = match wanted_players {
-    Some(v) => v.iter().map(|x| x.parse::<u64>().unwrap_or(0)).collect(),
-    None => vec![],
-  };
+) -> napi::Result<ResolvedPropStates> {
   let prop_states = prop_states.unwrap_or_default();
   let mut seen_prop_states = HashSet::new();
   for prop in &prop_states {
@@ -596,7 +567,10 @@ pub fn parse_ticks(
     if !seen_real_prop_state_names.insert(real_name.clone()) {
       return Err(Error::new(
         Status::InvalidArg,
-        format!("Multiple prop states resolve to the same real name `{}`", real_name),
+        format!(
+          "Multiple prop states resolve to the same real name `{}`",
+          real_name
+        ),
       ));
     }
   }
@@ -613,6 +587,33 @@ pub fn parse_ticks(
     };
     real_wanted_prop_states.insert(real_name.clone(), state.clone());
   }
+  let prop_state_names = real_wanted_prop_state_names
+    .into_iter()
+    .zip(wanted_prop_state_names)
+    .collect();
+  Ok((real_wanted_prop_states, prop_state_names))
+}
+
+#[napi]
+pub fn parse_ticks(
+  path_or_buf: Either<String, Buffer>,
+  wanted_props: Option<Vec<String>>,
+  wanted_ticks: Option<Vec<i32>>,
+  wanted_players: Option<Vec<String>>,
+  struct_of_arrays: Option<bool>,
+  order_by_steamid: Option<bool>,
+  prop_states: Option<Vec<WantedPropState>>,
+) -> napi::Result<Value> {
+  let wanted_props = wanted_props.unwrap_or_default();
+  let real_names = match rm_user_friendly_names(&wanted_props) {
+    Ok(names) => names,
+    Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
+  };
+  let wanted_players_u64 = match wanted_players {
+    Some(v) => v.iter().map(|x| x.parse::<u64>().unwrap_or(0)).collect(),
+    None => vec![],
+  };
+  let (real_wanted_prop_states, prop_state_names) = resolve_prop_states(prop_states)?;
 
   let bytes = resolve_byte_type(path_or_buf)?;
   let huf = create_huffman_lookup_table();
@@ -621,10 +622,7 @@ pub fn parse_ticks(
   for (real_name, user_friendly_name) in real_names.iter().zip(&wanted_props) {
     real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
   }
-  for (real_name, user_friendly_name) in real_wanted_prop_state_names
-    .iter()
-    .zip(&wanted_prop_state_names)
-  {
+  for (real_name, user_friendly_name) in &prop_state_names {
     real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
   }
 
@@ -662,13 +660,9 @@ pub fn parse_ticks(
 
   let mut parser = Parser::new(settings, parser::parse_demo::ParsingMode::Normal);
   let output = parse_demo(bytes, &mut parser)?;
-  real_names.push("tick".to_owned());
-  real_names.push("steamid".to_owned());
-  real_names.push("name".to_owned());
 
   let mut prop_infos = output.prop_controller.prop_infos.clone();
   prop_infos.sort_by_key(|x| x.prop_name.clone());
-  real_names.sort();
 
   let helper = OutputSerdeHelperStruct {
     prop_infos: prop_infos.clone(),
@@ -717,13 +711,16 @@ pub fn parse_ticks(
 #[napi]
 pub fn parse_tick_range(
   path_or_buf: Either<String, Buffer>,
-  wanted_props: Vec<String>,
+  wanted_props: Option<Vec<String>>,
   tick_lo: i32,
   tick_hi: i32,
   wanted_players: Option<Vec<String>>,
   struct_of_arrays: Option<bool>,
+  order_by_steamid: Option<bool>,
+  prop_states: Option<Vec<WantedPropState>>,
 ) -> napi::Result<Value> {
-  let mut real_names = match rm_user_friendly_names(&wanted_props) {
+  let wanted_props = wanted_props.unwrap_or_default();
+  let real_names = match rm_user_friendly_names(&wanted_props) {
     Ok(names) => names,
     Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
   };
@@ -731,6 +728,7 @@ pub fn parse_tick_range(
     Some(v) => v.iter().map(|x| x.parse::<u64>().unwrap_or(0)).collect(),
     None => vec![],
   };
+  let (real_wanted_prop_states, prop_state_names) = resolve_prop_states(prop_states)?;
 
   let bytes = resolve_byte_type(path_or_buf)?;
   let huf = create_huffman_lookup_table();
@@ -739,6 +737,14 @@ pub fn parse_tick_range(
   for (real_name, user_friendly_name) in real_names.iter().zip(&wanted_props) {
     real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
   }
+  for (real_name, user_friendly_name) in &prop_state_names {
+    real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
+  }
+
+  let order_by_steamid = match order_by_steamid {
+    Some(true) => true,
+    _ => false,
+  };
 
   let settings = ParserInputs {
     real_name_to_og_name: real_name_to_og_name,
@@ -748,14 +754,14 @@ pub fn parse_tick_range(
     wanted_events: vec![],
     collect_ticks: true,
     parse_voice: false,
-    wanted_prop_states: AHashMap::default(),
+    wanted_prop_states: real_wanted_prop_states,
     parse_ents: true,
     wanted_ticks: vec![],
     parse_projectiles: false,
     list_props: false,
     only_convars: false,
     huffman_lookup_table: &huf,
-    order_by_steamid: false,
+    order_by_steamid: order_by_steamid,
     fallback_bytes: None,
     parse_grenades: false,
     parse_weapons: false,
@@ -786,18 +792,30 @@ pub fn parse_tick_range(
       }
     }
   };
-  real_names.push("tick".to_owned());
-  real_names.push("steamid".to_owned());
-  real_names.push("name".to_owned());
 
   let mut prop_infos = output.prop_controller.prop_infos.clone();
   prop_infos.sort_by_key(|x| x.prop_name.clone());
-  real_names.sort();
 
   let helper = OutputSerdeHelperStruct {
     prop_infos: prop_infos.clone(),
     inner: output.df.clone().into(),
   };
+
+  if order_by_steamid {
+    let mut helper_hm: HashMap<u64, _, RandomState> = HashMap::default();
+    for (k, v) in output.df_per_player {
+      let helper = OutputSerdeHelperStruct {
+        prop_infos: prop_infos.clone(),
+        inner: v.into(),
+      };
+      helper_hm.insert(k, helper);
+    }
+    let s = match serde_json::to_value(helper_hm) {
+      Ok(s) => s,
+      Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
+    };
+    return Ok(s);
+  }
 
   let is_soa = match struct_of_arrays {
     Some(true) => true,

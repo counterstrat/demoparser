@@ -1,5 +1,6 @@
 use super::read_bits::Bitreader;
 use super::read_bits::DemoParserError;
+use crate::first_pass::parser_settings::filter_prop_names;
 use crate::first_pass::parser_settings::needs_velocity;
 use crate::first_pass::parser_settings::FirstPassParser;
 use crate::first_pass::prop_controller::FLASHBANG_AMMO_ID;
@@ -96,7 +97,8 @@ impl<'a> FirstPassParser<'a> {
             Err(_) => return Err(DemoParserError::MalformedMessage),
         };
         // TODO MOVE
-        if needs_velocity(&self.wanted_player_props) {
+        let filter_props = filter_prop_names(self.settings);
+        if needs_velocity(&filter_props) {
             let new_props = vec!["X".to_string(), "Y".to_string(), "Z".to_string()];
             for prop in new_props {
                 if !self.wanted_player_props.contains(&prop) {
@@ -110,7 +112,7 @@ impl<'a> FirstPassParser<'a> {
             self.wanted_other_props.clone(),
             self.wanted_prop_states.clone(),
             self.real_name_to_og_name.clone(),
-            needs_velocity(&self.wanted_player_props),
+            needs_velocity(&filter_props),
             &self.wanted_events,
             self.parse_projectiles,
             self.parse_weapons,

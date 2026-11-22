@@ -2,6 +2,7 @@ use crate::first_pass::frameparser::{StartEndOffset, StartEndType};
 use crate::first_pass::parser::SharedFirstPass;
 use crate::first_pass::parser_settings::check_multithreadability;
 use crate::first_pass::parser_settings::continuous_decode_required;
+use crate::first_pass::parser_settings::filter_prop_names;
 use crate::first_pass::parser_settings::{FirstPassParser, ParserInputs};
 use crate::first_pass::prop_controller::{PropController, NAME_ID, STEAMID_ID, TICK_ID};
 use crate::first_pass::read_bits::DemoParserError;
@@ -422,7 +423,7 @@ impl<'a> Parser<'a> {
         shared: SharedFirstPass,
         start_idx: usize,
     ) -> Result<ChunkIter<'a, 'b>, DemoParserError> {
-        let offending = continuous_decode_required(&self.input.wanted_player_props);
+        let offending = continuous_decode_required(&filter_prop_names(&self.input));
         if !offending.is_empty() {
             return Err(DemoParserError::NonMultithreadableProps(format!(
                 "iter_chunks cannot serve props {:?} that require cross-segment state or continuous decode (stateful props or velocity-derived props): per-segment decode cannot carry their state across segments; use parse_tick_range or parse_demo instead",
@@ -476,7 +477,7 @@ impl<'a> Parser<'a> {
         // conditions (`!check_multithreadability` for NON_MULTITHREADABLE
         // state props, `needs_velocity` for `contains("velo")` props), so
         // this branch serves the same queries the old fallback did.
-        if !continuous_decode_required(&self.input.wanted_player_props).is_empty() {
+        if !continuous_decode_required(&filter_prop_names(&self.input)).is_empty() {
             return self.parse_tick_range_continuous(demo_bytes, shared, lo, hi);
         }
         let sel_range = segments_for_tick_range(&shared, lo, hi);
@@ -701,7 +702,7 @@ impl<'a> Parser<'a> {
         // state cannot be preserved. Fail loudly instead of returning
         // silently-wrong rows; callers needing those props should use
         // `parse_tick_range` (continuous fallback) or the full `parse_demo`.
-        let offending = continuous_decode_required(&self.input.wanted_player_props);
+        let offending = continuous_decode_required(&filter_prop_names(&self.input));
         if !offending.is_empty() {
             return Err(DemoParserError::NonMultithreadableProps(format!(
                 "parse_tick_ranges cannot serve props {:?} that require cross-segment state or continuous decode (stateful props or velocity-derived props): per-segment decode cannot carry their state across segments; use parse_tick_range or parse_demo instead",
@@ -910,7 +911,7 @@ impl<'a> Parser<'a> {
             eprintln!("[prof] first_pass: {:.3}s", _t.elapsed().as_secs_f64());
         }
         if self.parsing_mode == ParsingMode::Normal
-            && check_multithreadability(&self.input.wanted_player_props)
+            && check_multithreadability(&filter_prop_names(&self.input))
             && !(self.parsing_mode == ParsingMode::ForceSingleThreaded)
             || self.parsing_mode == ParsingMode::ForceMultiThreaded
         {

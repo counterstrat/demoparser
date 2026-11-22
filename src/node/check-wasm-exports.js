@@ -11,6 +11,34 @@
 // and the default export are wasm-bindgen initialization glue and are allowed
 // on top of the API set.
 //
+// The prop-state surface is also guarded: `parseTicks` and `parseTickRange`
+// must keep their `prop_states` parameter in both `lib.rs` and the generated
+// declarations, `ChunkOpts` must keep its serde-mapped `propStates` field,
+// the `ChunkParser` constructor must read it through `Reflect`, and the
+// generated `ChunkOpts` TypeScript interface must expose it. `parseTicks` and
+// `parseTickRange` must also keep `order_by_steamid` between
+// `struct_of_arrays` and `prop_states` in both signatures and thread it into
+// `ParserInputs`, so the WASM argument order cannot drift from native.
+//
+// The array-typed list parameters are guarded from both ends: `lib.rs` must
+// carry a wasm-bindgen `unchecked_param_type` (or
+// `unchecked_optional_param_type`) on every string list and tick list, and the
+// generated declarations must type those parameters as `string[]`,
+// `WantedPropState[]`, or `number[]` (nullable and optional where the runtime
+// accepts `null`/`undefined`) instead of `any`. Tick lists must not accept
+// `Int32Array`, matching native's `number[]`. That pins the editor surface to
+// the runtime checks in `lib.rs` for `parseTicks`, `parseTickRange`,
+// `parseEvent`, `parseEvents`, `parseGrenades`, and `parseWeapons`.
+// `ChunkPropState` must stay an alias of `WantedPropState` so the chunk API and
+// the native binding describe one prop-state concept. Demo-byte parameters must
+// keep checked `Uint8Array`-only types (and `parseEvent`/`parseEvents` their
+// optional `gameEventListBytes`), so `number[]` is rejected like native's
+// non-`Buffer` input; `parseEvent.event_name` must stay required `string` to
+// match native.
+// Signatures and struct/function bodies are parsed structurally (balanced
+// parens/braces, comments and strings masked), so docs and substrings cannot
+// satisfy the guard.
+//
 // Run: `node check-wasm-exports.js` (from `src/node/`). Exit non-zero
 // lists the missing names.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -56,6 +84,10 @@ if (wasmFiles.length === 0) {
   process.exit(2)
 }
 
+// wasm-bindgen initialization glue, not part of `src/wasm/src/lib.rs`. Keep
+// this allowlist scoped to names wasm-bindgen itself emits; any other extra
+// export must come from a `lib.rs` declaration. Update this list only when a
+// wasm-bindgen upgrade renames or drops its init entry points.
 const glueNames = new Set(['initSync', 'default', '__wbg_init'])
 
 const declaredNames = (source) => {
@@ -74,7 +106,8 @@ const declaredNames = (source) => {
 }
 
 const runtimeNames = declaredNames(readFileSync(join(dir, wasmExport.default), 'utf8'))
-const typeNames = declaredNames(readFileSync(typesEntry, 'utf8'))
+const typesSource = readFileSync(typesEntry, 'utf8')
+const typeNames = declaredNames(typesSource)
 
 const jsNameOf = (attrs, rustName) => {
   const match = attrs.match(/js_name\s*=\s*(?:"([^"]+)"|([A-Za-z_$][\w$]*))/)
@@ -82,6 +115,130 @@ const jsNameOf = (attrs, rustName) => {
 }
 
 const libSrc = readFileSync(join(dir, '../wasm/src/lib.rs'), 'utf8')
+
+// Blank comments and string/char literals while keeping byte positions, so
+// structural scans (balanced braces/parens, signatures) never trip over
+// braces in doc comments or error strings. Raw strings matter here because
+// `typescript_custom_section` embeds TypeScript with braces.
+const maskTrivia = (source, rust) => {
+  const out = source.split('')
+  const blank = (start, end) => {
+    for (let i = start; i < end && i < out.length; i += 1) {
+      if (out[i] !== '\n' && out[i] !== '\r') out[i] = ' '
+    }
+  }
+  let i = 0
+  while (i < source.length) {
+    if (source.startsWith('//', i)) {
+      const newline = source.indexOf('\n', i)
+      const stop = newline === -1 ? source.length : newline
+      blank(i, stop)
+      i = stop
+    } else if (source.startsWith('/*', i)) {
+      let depth = 1
+      let j = i + 2
+      while (j < source.length && depth > 0) {
+        if (source.startsWith('/*', j)) {
+          depth += 1
+          j += 2
+        } else if (source.startsWith('*/', j)) {
+          depth -= 1
+          j += 2
+        } else {
+          j += 1
+        }
+      }
+      blank(i, j)
+      i = j
+    } else if (rust && source[i] === 'r' && (i === 0 || !/[A-Za-z0-9_]/.test(source[i - 1]))) {
+      const prefix = /^r(#*)"/.exec(source.slice(i))
+      if (!prefix) {
+        i += 1
+        continue
+      }
+      const close = `"${prefix[1]}`
+      const start = i + prefix[0].length
+      const found = source.indexOf(close, start)
+      const stop = found === -1 ? source.length : found + close.length
+      blank(i, stop)
+      i = stop
+    } else if (source[i] === '"') {
+      let j = i + 1
+      while (j < source.length) {
+        if (source[j] === '\\') {
+          j += 2
+          continue
+        }
+        if (source[j] === '"') {
+          j += 1
+          break
+        }
+        j += 1
+      }
+      blank(i, j)
+      i = j
+    } else if (!rust && source[i] === "'") {
+      let j = i + 1
+      while (j < source.length) {
+        if (source[j] === '\\') {
+          j += 2
+          continue
+        }
+        if (source[j] === "'") {
+          j += 1
+          break
+        }
+        j += 1
+      }
+      blank(i, j)
+      i = j
+    } else if (rust && source[i] === "'") {
+      const charLiteral = /^'(?:\\.|[^\\'])'/.exec(source.slice(i, i + 8))
+      if (charLiteral) {
+        blank(i, i + charLiteral[0].length)
+        i += charLiteral[0].length
+      } else {
+        i += 1
+      }
+    } else {
+      i += 1
+    }
+  }
+  return out.join('')
+}
+
+const maskedLib = maskTrivia(libSrc, true)
+const maskedTypes = maskTrivia(typesSource, false)
+
+const endOfBalanced = (source, openIndex) => {
+  const close = { '(': ')', '{': '}', '[': ']' }[source[openIndex]]
+  if (!close) return -1
+  let depth = 0
+  for (let i = openIndex; i < source.length; i += 1) {
+    if (source[i] === source[openIndex]) depth += 1
+    else if (source[i] === close) {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
+const bodyAfter = (source, pattern) => {
+  const match = pattern.exec(source)
+  if (!match) return null
+  const openIndex = match.index + match[0].length - 1
+  const end = endOfBalanced(source, openIndex)
+  return end === -1 ? null : { start: openIndex + 1, end }
+}
+
+const paramsOf = (source, pattern) => {
+  const match = pattern.exec(source)
+  if (!match) return null
+  const openIndex = match.index + match[0].length - 1
+  const end = endOfBalanced(source, openIndex)
+  return end === -1 ? null : source.slice(openIndex + 1, end)
+}
 
 const countBraces = (line) => (line.match(/\{/g)?.length ?? 0) - (line.match(/\}/g)?.length ?? 0)
 
@@ -94,7 +251,7 @@ const stripLiterals = (line) =>
 const wanted = []
 let depth = 0
 let pendingAttrs = null
-for (const rawLine of libSrc.split('\n')) {
+for (const rawLine of maskedLib.split('\n')) {
   const line = stripLiterals(rawLine)
   if (depth === 0) {
     const attribute = line.trim().match(/^#\[wasm_bindgen(?:\((.*)\))?\]$/)
@@ -143,6 +300,284 @@ const missingFromAdapter = wanted.filter((name) => !adapterApiNames.includes(nam
 const extraInAdapter = adapterApiNames.filter((name) => !wanted.includes(name))
 const hasDefaultInit = /export\s+default\s+wasm\.default/.test(wasmNodeSource)
 
+const rustParameters = (name) => paramsOf(maskedLib, new RegExp(`\\bfn\\s+${name}\\s*\\(`))
+// `maskedLib` blanks string literals, so attribute values are only readable
+// from the raw source. Signatures contain no parens inside comments or
+// strings, so balanced-paren extraction is safe here.
+const rawRustParameters = (name) => paramsOf(libSrc, new RegExp(`\\bfn\\s+${name}\\s*\\(`))
+const tsParameters = (name) =>
+  paramsOf(maskedTypes, new RegExp(`\\bexport\\s+function\\s+${name}\\s*\\(`))
+
+const propStateFunctions = ['parseTicks', 'parseTickRange']
+const missingPropStateParams = propStateFunctions.filter((name) => {
+  const rust = rustParameters(name)
+  const ts = tsParameters(name)
+  return rust === null || !/\bprop_states\s*:/.test(rust) || ts === null || !/\bprop_states\b/.test(ts)
+})
+
+const splitParams = (params) => {
+  const parts = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < params.length; i += 1) {
+    const char = params[i]
+    if ('([{<'.includes(char)) depth += 1
+    else if (')]}>'.includes(char)) depth -= 1
+    else if (char === ',' && depth === 0) {
+      parts.push(params.slice(start, i))
+      start = i + 1
+    }
+  }
+  parts.push(params.slice(start))
+  return parts.filter((part) => part.trim() !== '')
+}
+
+const paramEntry = (params, name) => {
+  if (params === null) return null
+  return (
+    splitParams(params).find((part) =>
+      new RegExp(`(?:^|[^A-Za-z0-9_])${name}\\s*\\??\\s*:`).test(part)
+    ) ?? null
+  )
+}
+
+const arrayTypedParams = {
+  parseTicks: {
+    wanted_props: 'string[]',
+    wanted_ticks: 'number[]',
+    wanted_players: 'string[]',
+    prop_states: 'WantedPropState[]'
+  },
+  parseTickRange: {
+    wanted_props: 'string[]',
+    wanted_players: 'string[]',
+    prop_states: 'WantedPropState[]'
+  },
+  parseEvent: {
+    wanted_player_props: 'string[]',
+    wanted_other_props: 'string[]'
+  },
+  parseEvents: {
+    event_names: 'string[]',
+    wanted_player_props: 'string[]',
+    wanted_other_props: 'string[]'
+  },
+  parseGrenades: {
+    extra: 'string[]',
+    ticks: 'number[]',
+    grenade_classes: 'string[]'
+  },
+  parseWeapons: {
+    extra: 'string[]',
+    ticks: 'number[]'
+  }
+}
+
+// Tick lists take `number[]` only; `Int32Array` must not reappear, matching
+// native's rejection of non-array tick input.
+const int32TypedParams = ['parseTicks.wanted_ticks', 'parseGrenades.ticks', 'parseWeapons.ticks']
+
+const missingParamTypeAttrs = []
+const mismatchedTypedParams = []
+for (const [name, params] of Object.entries(arrayTypedParams)) {
+  for (const [param, expectedType] of Object.entries(params)) {
+    const rustEntry = paramEntry(rustParameters(name), param)
+    const rawRustEntry = paramEntry(rawRustParameters(name), param)
+    if (
+      rustEntry === null ||
+      !/#\[wasm_bindgen\(\s*unchecked_(?:optional_)?param_type\s*=/.test(rustEntry) ||
+      (int32TypedParams.includes(`${name}.${param}`) &&
+        (rawRustEntry === null || /\bInt32Array\b/.test(rawRustEntry)))
+    ) {
+      missingParamTypeAttrs.push(`${name}.${param}`)
+    }
+
+    const tsEntry = paramEntry(tsParameters(name), param)
+    if (
+      tsEntry === null ||
+      !tsEntry.includes(expectedType) ||
+      (int32TypedParams.includes(`${name}.${param}`) && /\bInt32Array\b/.test(tsEntry)) ||
+      !/\bnull\b/.test(tsEntry) ||
+      !/\bundefined\b/.test(tsEntry) ||
+      /:\s*any\b/.test(tsEntry)
+    ) {
+      mismatchedTypedParams.push(`${name}.${param} (want ${expectedType})`)
+    }
+  }
+}
+
+// Demo bytes are passed as `JsValue` so the runtime can reject strings,
+// objects, and out-of-range entries with a `JsError` instead of letting
+// wasm-bindgen's `Vec<u8>` conversion coerce them. Pin the declarations to the
+// types the runtime accepts.
+const bytesTypedParams = {
+  parseEvent: 'file',
+  parseEvents: 'file',
+  listGameEvents: 'fileBytes',
+  listUpdatedFields: 'fileBytes',
+  parseTicks: 'file',
+  parseTickRange: 'file',
+  parseGrenades: 'file',
+  parseWeapons: 'file',
+  parseHeader: 'file'
+}
+const optionalBytesTypedParams = {
+  parseEvent: 'game_event_list_bytes',
+  parseEvents: 'game_event_list_bytes'
+}
+
+const missingBytesParamTypes = []
+for (const [name, param] of Object.entries(bytesTypedParams)) {
+  const rustEntry = paramEntry(rustParameters(name), param)
+  const rawRustEntry = paramEntry(rawRustParameters(name), param)
+  if (
+    rustEntry === null ||
+    rawRustEntry === null ||
+    !/#\[wasm_bindgen\(\s*unchecked_param_type\s*=\s*"Uint8Array"\s*\)\]/.test(rawRustEntry)
+  ) {
+    missingBytesParamTypes.push(`${name}.${param}`)
+  }
+
+  const tsEntry = paramEntry(tsParameters(name), param)
+  if (
+    tsEntry === null ||
+    !/Uint8Array/.test(tsEntry) ||
+    /number\[\]/.test(tsEntry) ||
+    /\bnull\b/.test(tsEntry) ||
+    /\bundefined\b/.test(tsEntry) ||
+    /:\s*any\b/.test(tsEntry)
+  ) {
+    missingBytesParamTypes.push(`${name}.${param} (declaration)`)
+  }
+}
+for (const [name, param] of Object.entries(optionalBytesTypedParams)) {
+  const rustEntry = paramEntry(rustParameters(name), param)
+  const rawRustEntry = paramEntry(rawRustParameters(name), param)
+  if (
+    rustEntry === null ||
+    rawRustEntry === null ||
+    !/#\[wasm_bindgen\(\s*unchecked_optional_param_type\s*=\s*"Uint8Array \| null \| undefined"\s*\)\]/.test(
+      rawRustEntry
+    )
+  ) {
+    missingBytesParamTypes.push(`${name}.${param}`)
+  }
+
+  const tsEntry = paramEntry(tsParameters(name), param)
+  if (
+    tsEntry === null ||
+    !/Uint8Array/.test(tsEntry) ||
+    /number\[\]/.test(tsEntry) ||
+    !/\bnull\b/.test(tsEntry) ||
+    !/\bundefined\b/.test(tsEntry) ||
+    /:\s*any\b/.test(tsEntry)
+  ) {
+    missingBytesParamTypes.push(`${name}.${param} (declaration)`)
+  }
+}
+
+// Native `parseEvent` takes a required `String`; WASM must too, or a missing
+// event name silently becomes the `"none"` sentinel instead of rejecting.
+const eventNameEntry = paramEntry(tsParameters('parseEvent'), 'event_name')
+const rustEventNameEntry = paramEntry(rustParameters('parseEvent'), 'event_name')
+const eventNameRequired =
+  eventNameEntry !== null &&
+  /\bevent_name\s*:\s*string\b/.test(eventNameEntry) &&
+  !/\bnull\b/.test(eventNameEntry) &&
+  !/\bundefined\b/.test(eventNameEntry) &&
+  rustEventNameEntry !== null &&
+  /#\[wasm_bindgen\(\s*unchecked_param_type\s*=/.test(rustEventNameEntry)
+
+// parseTicks can make wanted_props optional because every later parameter is
+// optional too. parseTickRange cannot: wasm-bindgen rejects an optional
+// parameter before required `tick_lo`/`tick_hi`, so its declaration stays
+// required-but-nullable. Both must type it as `string[]`, not `any`.
+const parseTicksWantedPropsOptional = (() => {
+  const entry = paramEntry(tsParameters('parseTicks'), 'wanted_props')
+  return entry !== null && /\bwanted_props\?\s*:/.test(entry)
+})()
+
+const tickRangeWantedPropsTyped = (() => {
+  const entry = paramEntry(tsParameters('parseTickRange'), 'wanted_props')
+  return entry !== null && /\bwanted_props\s*:\s*string\[\]/.test(entry)
+})()
+
+const chunkPropStateAliasOk =
+  /\bexport\s+interface\s+WantedPropState\s*\{/.test(maskedTypes) &&
+  /\bexport\s+type\s+ChunkPropState\s*=\s*WantedPropState\b/.test(maskedTypes)
+
+const functionBodyOf = (name) => {
+  const match = new RegExp(`\\bfn\\s+${name}\\s*\\(`).exec(maskedLib)
+  if (!match) return null
+  const paramsOpen = match.index + match[0].length - 1
+  const paramsEnd = endOfBalanced(maskedLib, paramsOpen)
+  if (paramsEnd === -1) return null
+  const bodyStart = maskedLib.indexOf('{', paramsEnd)
+  if (bodyStart === -1) return null
+  const bodyEnd = endOfBalanced(maskedLib, bodyStart)
+  return bodyEnd === -1 ? null : libSrc.slice(bodyStart, bodyEnd)
+}
+
+const paramsInOrder = (params, names) => {
+  if (params === null) return false
+  let cursor = 0
+  for (const name of names) {
+    const match = new RegExp(`\\b${name}\\s*\\??\\s*:`).exec(params.slice(cursor))
+    if (!match) return false
+    cursor += match.index + match[0].length
+  }
+  return true
+}
+
+const orderParams = ['struct_of_arrays', 'order_by_steamid', 'prop_states']
+const orderFunctions = ['parseTicks', 'parseTickRange']
+const orderOk = orderFunctions.every((name) => {
+  const body = functionBodyOf(name) ?? ''
+  return (
+    paramsInOrder(rustParameters(name), orderParams) &&
+    paramsInOrder(tsParameters(name), orderParams) &&
+    /let\s+order_by_steamid\s*=\s*match\s+order_by_steamid\b/.test(body) &&
+    /\border_by_steamid\s*:\s*order_by_steamid\b/.test(body)
+  )
+})
+
+const chunkOptsRange = bodyAfter(maskedLib, /\bstruct\s+ChunkOpts\s*\{/)
+const chunkOptsSource = chunkOptsRange
+  ? libSrc.slice(chunkOptsRange.start, chunkOptsRange.end)
+  : ''
+const chunkOptsHasPropStates =
+  /#\[serde\([\s\S]*?rename\s*=\s*"propStates"[\s\S]*?\)\]\s*prop_states\s*:\s*Option\s*<\s*serde\s*::\s*de\s*::\s*IgnoredAny\s*>/.test(
+    chunkOptsSource
+  )
+
+const chunkImplRange = bodyAfter(maskedLib, /\bimpl\s+ChunkParser\s*\{/)
+const chunkImplMasked = chunkImplRange
+  ? maskedLib.slice(chunkImplRange.start, chunkImplRange.end)
+  : ''
+const chunkImplSource = chunkImplRange ? libSrc.slice(chunkImplRange.start, chunkImplRange.end) : ''
+const newMatch = /\bfn\s+new\s*\(/.exec(chunkImplMasked)
+let chunkConstructorReadsPropStates = false
+if (newMatch) {
+  const paramsOpen = newMatch.index + newMatch[0].length - 1
+  const paramsEnd = endOfBalanced(chunkImplMasked, paramsOpen)
+  const bodyStart = paramsEnd === -1 ? -1 : chunkImplMasked.indexOf('{', paramsEnd)
+  const bodyEnd = bodyStart === -1 ? -1 : endOfBalanced(chunkImplMasked, bodyStart)
+  const body =
+    bodyStart === -1 || bodyEnd === -1 ? '' : chunkImplSource.slice(bodyStart, bodyEnd)
+  chunkConstructorReadsPropStates = /Reflect::get\s*\([^;]*?JsValue::from_str\s*\(\s*"propStates"\s*\)/.test(
+    body
+  )
+}
+
+const chunkOptsTypeRange = bodyAfter(maskedTypes, /\binterface\s+ChunkOpts\s*\{/)
+const chunkOptsTypeSource = chunkOptsTypeRange
+  ? typesSource.slice(chunkOptsTypeRange.start, chunkOptsTypeRange.end)
+  : ''
+const chunkOptsTypeHasPropStates = /\bpropStates\s*\??\s*:/.test(chunkOptsTypeSource)
+
+const missingChunkPropStates =
+  !chunkOptsHasPropStates || !chunkConstructorReadsPropStates || !chunkOptsTypeHasPropStates
+
 if (missingRuntime.length > 0) {
   console.error(`check-wasm-exports: wasm JS glue is missing exports: ${missingRuntime.join(', ')}`)
 }
@@ -161,6 +596,56 @@ if (missingFromAdapter.length > 0) {
 if (extraInAdapter.length > 0) {
   console.error(`check-wasm-exports: wasm-node.js exports unknown names: ${extraInAdapter.join(', ')}`)
 }
+if (missingPropStateParams.length > 0) {
+  console.error(
+    `check-wasm-exports: propStates is not exposed on: ${missingPropStateParams.join(', ')}`
+  )
+}
+if (missingParamTypeAttrs.length > 0) {
+  console.error(
+    `check-wasm-exports: lib.rs is missing unchecked_param_type on: ${missingParamTypeAttrs.join(', ')}`
+  )
+}
+if (mismatchedTypedParams.length > 0) {
+  console.error(
+    `check-wasm-exports: generated declarations do not type the list parameters correctly: ${mismatchedTypedParams.join(', ')}`
+  )
+}
+if (missingBytesParamTypes.length > 0) {
+  console.error(
+    `check-wasm-exports: demo bytes parameters are missing checked Uint8Array-only types: ${missingBytesParamTypes.join(', ')}`
+  )
+}
+if (!eventNameRequired) {
+  console.error(
+    'check-wasm-exports: parseEvent must take a required string event_name, matching native'
+  )
+}
+if (!parseTicksWantedPropsOptional) {
+  console.error('check-wasm-exports: parseTicks declarations must make wanted_props optional')
+}
+if (!tickRangeWantedPropsTyped) {
+  console.error(
+    'check-wasm-exports: parseTickRange declarations must type wanted_props as a required nullable string[]'
+  )
+}
+if (!chunkPropStateAliasOk) {
+  console.error(
+    'check-wasm-exports: declarations must define WantedPropState and alias ChunkPropState to it'
+  )
+}
+if (!orderOk) {
+  console.error(
+    'check-wasm-exports: parseTicks and parseTickRange must keep struct_of_arrays, order_by_steamid, prop_states in that order in lib.rs and the generated declarations, and thread order_by_steamid into ParserInputs'
+  )
+}
+if (missingChunkPropStates) {
+  const gaps = []
+  if (!chunkOptsHasPropStates) gaps.push('ChunkOpts.propStates field')
+  if (!chunkConstructorReadsPropStates) gaps.push('constructor Reflect read')
+  if (!chunkOptsTypeHasPropStates) gaps.push('ChunkOpts TypeScript interface')
+  console.error(`check-wasm-exports: ChunkParser opts is missing propStates support: ${gaps.join(', ')}`)
+}
 if (!hasDefaultInit) {
   console.error('check-wasm-exports: wasm-node.js must re-export the default init function only')
 }
@@ -171,6 +656,16 @@ if (
   extraTypes.length > 0 ||
   missingFromAdapter.length > 0 ||
   extraInAdapter.length > 0 ||
+  missingPropStateParams.length > 0 ||
+  missingParamTypeAttrs.length > 0 ||
+  mismatchedTypedParams.length > 0 ||
+  missingBytesParamTypes.length > 0 ||
+  !eventNameRequired ||
+  !parseTicksWantedPropsOptional ||
+  !tickRangeWantedPropsTyped ||
+  !chunkPropStateAliasOk ||
+  !orderOk ||
+  missingChunkPropStates ||
   !hasDefaultInit
 ) {
   console.error('check-wasm-exports: rebuild with `npm run build:wasm` or fix wasm-node.js')

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
-import { parseTicks } from '../index.js'
+import { parseTickRange, parseTicks } from '../index.js'
 
 const demo = fileURLToPath(new URL('../../parser/test_demo.dem', import.meta.url))
 const ticks = [50, 100, 200, 300, 400, 500]
@@ -11,6 +11,9 @@ const parse = (propStates) =>
 
 const parseFilter = (props, wantedTicks, propStates) =>
   parseTicks(demo, props, wantedTicks, null, false, false, propStates)
+
+const parseRange = (props, lo, hi, propStates, orderBySteamid = false) =>
+  parseTickRange(demo, props, lo, hi, null, false, orderBySteamid, propStates)
 
 test('duplicate prop state keys are rejected', () => {
   assert.throws(
@@ -84,4 +87,88 @@ test('string prop state filters rows', () => {
   const matching = parseFilter(['clan_name'], [100], [{ prop: 'clan_name', state: all[0].clan_name }])
   assert.deepEqual(matching, all)
   assert.equal(parseFilter(['clan_name'], [100], [{ prop: 'clan_name', state: 'no-such-clan' }]).length, 0)
+})
+
+test('null, undefined, and empty propStates mean no filter', () => {
+  const unfiltered = parseFilter(['health'], ticks, null)
+  assert.deepEqual(parseFilter(['health'], ticks, undefined), unfiltered)
+  assert.deepEqual(parseFilter(['health'], ticks, []), unfiltered)
+})
+
+test('null and undefined wantedProps mean no filter', () => {
+  const allTicks = parseTicks(demo, [], ticks, null, false, false, null)
+  assert.deepEqual(parseTicks(demo, null, ticks, null, false, false, null), allTicks)
+  assert.deepEqual(parseTicks(demo, undefined, ticks, null, false, false, null), allTicks)
+
+  const allRows = parseTickRange(demo, [], 100, 300, null, false, false, null)
+  assert.deepEqual(parseTickRange(demo, null, 100, 300, null, false, false, null), allRows)
+  assert.deepEqual(parseTickRange(demo, undefined, 100, 300, null, false, false, null), allRows)
+})
+
+test('non-array wantedProps are still rejected', () => {
+  assert.throws(() => parseTicks(demo, 'health', ticks, null, false, false, null), /Array length/)
+  assert.throws(() => parseTickRange(demo, {}, 100, 300, null, false, false, null), /Array length/)
+})
+
+test('edge prop state numbers keep native number typing', () => {
+  for (const state of [1.5, -2147483648, 2147483647, -0, 0n]) {
+    assert.doesNotThrow(() =>
+      parseFilter(['game_time'], [80], [{ prop: 'game_time', state }])
+    )
+  }
+})
+
+test('parseTickRange applies propStates like parseTicks', () => {
+  const lo = 100
+  const hi = 300
+  const wantedTicks = []
+  for (let tick = lo; tick <= hi; tick += 1) wantedTicks.push(tick)
+
+  for (const [prop, state] of [
+    ['health', 100],
+    ['game_time', 71n],
+    ['team_name', 'CT']
+  ]) {
+    const expected = parseFilter([prop], wantedTicks, [{ prop, state }])
+    const actual = parseRange([prop], lo, hi, [{ prop, state }])
+    assert.deepEqual(actual, expected)
+  }
+})
+
+test('parseTickRange orderBySteamid groups rows per player with ascending ticks', () => {
+  const lo = 100
+  const hi = 300
+  const unordered = parseRange(['health'], lo, hi, null, false)
+  const ordered = parseRange(['health'], lo, hi, null, true)
+
+  assert.ok(Array.isArray(unordered))
+  assert.ok(!Array.isArray(ordered))
+
+  const steamids = Object.keys(ordered)
+  assert.ok(steamids.length > 0)
+  for (const steamid of steamids) {
+    const groupTicks = ordered[steamid].tick
+    assert.ok(groupTicks.length > 0)
+    assert.ok(groupTicks.every((tick, index, all) => index === 0 || tick >= all[index - 1]))
+  }
+
+  const expectedBySteamid = {}
+  for (const row of unordered) {
+    ;(expectedBySteamid[row.steamid] ??= []).push(row.tick)
+  }
+  assert.deepEqual(Object.keys(ordered).sort(), Object.keys(expectedBySteamid).sort())
+  for (const [steamid, groupTicks] of Object.entries(expectedBySteamid)) {
+    assert.deepEqual(ordered[steamid].tick, groupTicks)
+  }
+})
+
+test('parseTickRange rejects duplicate prop states', () => {
+  assert.throws(
+    () =>
+      parseRange(['team_name'], 100, 300, [
+        { prop: 'team_name', state: 'CT' },
+        { prop: 'team_name', state: 'TERRORIST' }
+      ]),
+    /Duplicate prop state/
+  )
 })
