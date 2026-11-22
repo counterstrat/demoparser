@@ -447,6 +447,7 @@ pub fn parseTickRange(
     tick_hi: i32,
     wanted_players: Option<Vec<JsValue>>,
     struct_of_arrays: Option<bool>,
+    order_by_steamid: Option<bool>,
     prop_states: Option<JsValue>,
 ) -> Result<JsValue, JsError> {
     let wanted_props = wanted_strings(wanted_props, "wantedProps")?;
@@ -467,6 +468,10 @@ pub fn parseTickRange(
     for (real_name, user_friendly_name) in &prop_state_names {
         real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
     }
+    let order_by_steamid = match order_by_steamid {
+        Some(true) => true,
+        _ => false,
+    };
     let settings = ParserInputs {
         wanted_players: wanted_players_u64,
         real_name_to_og_name: real_name_to_og_name.into(),
@@ -481,7 +486,7 @@ pub fn parseTickRange(
         list_props: false,
         only_convars: false,
         huffman_lookup_table: &arc_huf.clone(),
-        order_by_steamid: false,
+        order_by_steamid: order_by_steamid,
         wanted_prop_states: wanted_prop_states.into_iter().collect(),
         fallback_bytes: None,
         parse_grenades: false,
@@ -501,6 +506,26 @@ pub fn parseTickRange(
     };
     let mut prop_infos = output.prop_controller.prop_infos.clone();
     prop_infos.sort_by_key(|x| x.prop_name.clone());
+
+    if order_by_steamid {
+        let mut per_player: HashMap<String, OutputSerdeHelperStruct> = HashMap::default();
+        for (steamid, inner) in output.df_per_player {
+            per_player.insert(
+                steamid.to_string(),
+                OutputSerdeHelperStruct {
+                    prop_infos: prop_infos.clone(),
+                    inner: inner.into(),
+                },
+            );
+        }
+        let serializer = serde_wasm_bindgen::Serializer::new()
+            .serialize_maps_as_objects(true)
+            .serialize_missing_as_null(true);
+        return match per_player.serialize(&serializer) {
+            Ok(s) => Ok(s),
+            Err(e) => Err(JsError::new(&format!("{}", e))),
+        };
+    }
 
     let helper = OutputSerdeHelperStruct {
         prop_infos: prop_infos,

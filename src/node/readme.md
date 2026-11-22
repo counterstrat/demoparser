@@ -40,9 +40,8 @@ BigInt; integers above `u32::MAX` (4294967295) must be BigInt. A tick is kept
 only when every player matches every wanted state. `null` or an empty array
 means no filter.
 
-Both bindings take the same positional arguments in the same order; only the
-first argument differs (native accepts a path or Buffer, WASM takes the demo
-bytes). `propStates` is last, after `orderBySteamid`.
+Same argument order in both bindings; only the first argument
+differs (path/Buffer vs bytes).
 
 ```JavaScript
 // Native: path or Buffer.

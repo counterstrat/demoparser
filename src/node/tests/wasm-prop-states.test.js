@@ -16,11 +16,11 @@ const wasmSupportsPropStates = Boolean(
     typeof wasm.parseTicks === 'function' &&
     wasm.parseTicks.length >= 7 &&
     typeof wasm.parseTickRange === 'function' &&
-    wasm.parseTickRange.length >= 7
+    wasm.parseTickRange.length >= 8
 )
 
 const skipReason = wasm
-  ? 'wasm build predates propStates support; run `npm run build:wasm`'
+  ? 'wasm build predates propStates or range orderBySteamid support; run `npm run build:wasm`'
   : 'wasm build output is not built'
 const wasmTest = wasmSupportsPropStates
   ? test
@@ -38,17 +38,17 @@ const plain = (value) => {
   return value
 }
 
-const nativeTicks = (props, wantedTicks, propStates) =>
-  native.parseTicks(demoPath, props, wantedTicks, null, false, false, propStates)
+const nativeTicks = (props, wantedTicks, propStates, orderBySteamid = false) =>
+  native.parseTicks(demoPath, props, wantedTicks, null, false, orderBySteamid, propStates)
 
-const nativeRange = (props, lo, hi, propStates) =>
-  native.parseTickRange(demoPath, props, lo, hi, null, false, propStates)
+const nativeRange = (props, lo, hi, propStates, orderBySteamid = false) =>
+  native.parseTickRange(demoPath, props, lo, hi, null, false, orderBySteamid, propStates)
 
 const wasmTicks = (props, wantedTicks, propStates, orderBySteamid = false) =>
   wasm.parseTicks(bytes, props, wantedTicks, null, false, orderBySteamid, propStates)
 
-const wasmRange = (props, lo, hi, propStates) =>
-  wasm.parseTickRange(bytes, props, lo, hi, null, false, propStates)
+const wasmRange = (props, lo, hi, propStates, orderBySteamid = false) =>
+  wasm.parseTickRange(bytes, props, lo, hi, null, false, orderBySteamid, propStates)
 
 const matchingCases = [
   ['health numeric', ['health'], ticks, [{ prop: 'health', state: 100 }]],
@@ -273,6 +273,48 @@ wasmTest('parseTickRange propStates matches native parseTickRange', async (t) =>
   }
 })
 
+wasmTest('parseTickRange orderBySteamid matches native', async (t) => {
+  const props = ['health']
+  const lo = 100
+  const hi = 300
+
+  for (const orderBySteamid of [false, true]) {
+    await t.test(String(orderBySteamid), () => {
+      const expected = nativeRange(props, lo, hi, null, orderBySteamid)
+      const actual = plain(wasmRange(props, lo, hi, null, orderBySteamid))
+      assert.deepEqual(actual, expected)
+    })
+  }
+
+  const unordered = plain(wasmRange(props, lo, hi, null, false))
+  const ordered = plain(wasmRange(props, lo, hi, null, true))
+  assert.ok(Array.isArray(unordered))
+  assert.ok(!Array.isArray(ordered))
+
+  const steamids = Object.keys(ordered)
+  assert.ok(steamids.length > 0)
+  for (const steamid of steamids) {
+    const groupTicks = ordered[steamid].tick
+    assert.ok(groupTicks.length > 0)
+    assert.ok(groupTicks.every((tick, index, all) => index === 0 || tick >= all[index - 1]))
+  }
+
+  const expectedBySteamid = {}
+  for (const row of unordered) (expectedBySteamid[row.steamid] ??= []).push(row.tick)
+  assert.deepEqual(Object.keys(ordered).sort(), Object.keys(expectedBySteamid).sort())
+})
+
+wasmTest('parseTickRange combines propStates with orderBySteamid', () => {
+  const props = ['health']
+  const lo = 100
+  const hi = 300
+  const propStates = [{ prop: 'health', state: 100 }]
+
+  const expected = nativeRange(props, lo, hi, propStates, true)
+  const actual = plain(wasmRange(props, lo, hi, propStates, true))
+  assert.deepEqual(actual, expected)
+})
+
 wasmTest('ChunkParser ticks mode propStates matches native', () => {
   const rows = []
   const parser = new wasm.ChunkParser(bytes, 'ticks', ticks, {
@@ -337,7 +379,7 @@ wasmTest('non-string list arguments return JsError, not a trap', () => {
   assert.throws(() => wasm.parseTicks(bytes, ['health'], [100], [42], false, false, null), {
     message: 'wantedPlayers entries must be strings'
   })
-  assert.throws(() => wasm.parseTickRange(bytes, [42], 100, 100, null, false, null), {
+  assert.throws(() => wasm.parseTickRange(bytes, [42], 100, 100, null, false, false, null), {
     message: 'wantedProps entries must be strings'
   })
   assert.throws(() => wasm.parseEvent(bytes, 'player_death', [42]), {

@@ -47,7 +47,7 @@ let ticks_json = parseTicks(bytes, ['X', 'Y'])
 let alive_ticks = parseTicks(bytes, ['health'], null, null, false, false, [{ prop: 'health', state: 100 }])
 ```
 
-Both bindings accept the same `propStates` filter in the same position; only the first argument differs (native accepts a path or bytes, WASM always takes demo bytes). `parseTicks` takes it last, after `orderBySteamid`; `parseTickRange` takes it last too. See [Prop states](./src/node/readme.md#prop-states) for accepted state types.
+Same argument order in both bindings; only the first argument differs (path/Buffer vs bytes). See [Prop states](./src/node/readme.md#prop-states) for accepted state types.
 
 Browsers, bundlers, and edge runtimes use the wasm-bindgen `web` build, which needs one async init before the first call. The default export is the init function only; the API is the named exports. Bundlers that understand `new URL(..., import.meta.url)` (Vite, webpack 5, Rollup) pick up the `.wasm` asset automatically:
 

@@ -735,6 +735,7 @@ pub fn parse_tick_range(
   tick_hi: i32,
   wanted_players: Option<Vec<String>>,
   struct_of_arrays: Option<bool>,
+  order_by_steamid: Option<bool>,
   prop_states: Option<Vec<WantedPropState>>,
 ) -> napi::Result<Value> {
   let mut real_names = match rm_user_friendly_names(&wanted_props) {
@@ -758,6 +759,11 @@ pub fn parse_tick_range(
     real_name_to_og_name.insert(real_name.clone(), user_friendly_name.clone());
   }
 
+  let order_by_steamid = match order_by_steamid {
+    Some(true) => true,
+    _ => false,
+  };
+
   let settings = ParserInputs {
     real_name_to_og_name: real_name_to_og_name,
     wanted_players: wanted_players_u64,
@@ -773,7 +779,7 @@ pub fn parse_tick_range(
     list_props: false,
     only_convars: false,
     huffman_lookup_table: &huf,
-    order_by_steamid: false,
+    order_by_steamid: order_by_steamid,
     fallback_bytes: None,
     parse_grenades: false,
     parse_weapons: false,
@@ -816,6 +822,22 @@ pub fn parse_tick_range(
     prop_infos: prop_infos.clone(),
     inner: output.df.clone().into(),
   };
+
+  if order_by_steamid {
+    let mut helper_hm: HashMap<u64, _, RandomState> = HashMap::default();
+    for (k, v) in output.df_per_player {
+      let helper = OutputSerdeHelperStruct {
+        prop_infos: prop_infos.clone(),
+        inner: v.into(),
+      };
+      helper_hm.insert(k, helper);
+    }
+    let s = match serde_json::to_value(helper_hm) {
+      Ok(s) => s,
+      Err(e) => return Err(Error::new(Status::InvalidArg, format!("{}", e).to_owned())),
+    };
+    return Ok(s);
+  }
 
   let is_soa = match struct_of_arrays {
     Some(true) => true,

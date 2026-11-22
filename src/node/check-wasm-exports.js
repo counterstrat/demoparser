@@ -15,13 +15,13 @@
 // must keep their `prop_states` parameter in both `lib.rs` and the generated
 // declarations, `ChunkOpts` must keep its serde-mapped `propStates` field,
 // the `ChunkParser` constructor must read it through `Reflect`, and the
-// generated `ChunkOpts` TypeScript interface must expose it. `parseTicks`
-// must also keep `order_by_steamid` between `struct_of_arrays` and
-// `prop_states` in both signatures and thread it into `ParserInputs`, so the
-// WASM argument order cannot drift from native. Signatures and
-// struct/function bodies are parsed structurally (balanced parens/braces,
-// comments and strings masked), so docs and substrings cannot satisfy the
-// guard.
+// generated `ChunkOpts` TypeScript interface must expose it. `parseTicks` and
+// `parseTickRange` must also keep `order_by_steamid` between
+// `struct_of_arrays` and `prop_states` in both signatures and thread it into
+// `ParserInputs`, so the WASM argument order cannot drift from native.
+// Signatures and struct/function bodies are parsed structurally (balanced
+// parens/braces, comments and strings masked), so docs and substrings cannot
+// satisfy the guard.
 //
 // Run: `node check-wasm-exports.js` (from `src/node/`). Exit non-zero
 // lists the missing names.
@@ -314,13 +314,17 @@ const paramsInOrder = (params, names) => {
   return true
 }
 
-const parseTicksParams = ['struct_of_arrays', 'order_by_steamid', 'prop_states']
-const parseTicksBody = functionBodyOf('parseTicks') ?? ''
-const parseTicksOrderOk =
-  paramsInOrder(rustParameters('parseTicks'), parseTicksParams) &&
-  paramsInOrder(tsParameters('parseTicks'), parseTicksParams) &&
-  /let\s+order_by_steamid\s*=\s*match\s+order_by_steamid\b/.test(parseTicksBody) &&
-  /\border_by_steamid\s*:\s*order_by_steamid\b/.test(parseTicksBody)
+const orderParams = ['struct_of_arrays', 'order_by_steamid', 'prop_states']
+const orderFunctions = ['parseTicks', 'parseTickRange']
+const orderOk = orderFunctions.every((name) => {
+  const body = functionBodyOf(name) ?? ''
+  return (
+    paramsInOrder(rustParameters(name), orderParams) &&
+    paramsInOrder(tsParameters(name), orderParams) &&
+    /let\s+order_by_steamid\s*=\s*match\s+order_by_steamid\b/.test(body) &&
+    /\border_by_steamid\s*:\s*order_by_steamid\b/.test(body)
+  )
+})
 
 const chunkOptsRange = bodyAfter(maskedLib, /\bstruct\s+ChunkOpts\s*\{/)
 const chunkOptsSource = chunkOptsRange
@@ -380,9 +384,9 @@ if (missingPropStateParams.length > 0) {
     `check-wasm-exports: propStates is not exposed on: ${missingPropStateParams.join(', ')}`
   )
 }
-if (!parseTicksOrderOk) {
+if (!orderOk) {
   console.error(
-    'check-wasm-exports: parseTicks must keep struct_of_arrays, order_by_steamid, prop_states in that order in lib.rs and the generated declarations, and thread order_by_steamid into ParserInputs'
+    'check-wasm-exports: parseTicks and parseTickRange must keep struct_of_arrays, order_by_steamid, prop_states in that order in lib.rs and the generated declarations, and thread order_by_steamid into ParserInputs'
   )
 }
 if (missingChunkPropStates) {
@@ -403,7 +407,7 @@ if (
   missingFromAdapter.length > 0 ||
   extraInAdapter.length > 0 ||
   missingPropStateParams.length > 0 ||
-  !parseTicksOrderOk ||
+  !orderOk ||
   missingChunkPropStates ||
   !hasDefaultInit
 ) {

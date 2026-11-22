@@ -7,7 +7,9 @@
 // dependency packages, so this guard checks whichever local `.node` artifacts
 // a build left in this directory (skipping artifacts for other platforms).
 // This check fails if the ESM entry, its declarations, and a local binary
-// disagree, or if the entry falls back to CommonJS.
+// disagree, or if the entry falls back to CommonJS. The tick declarations must
+// keep `structOfArrays`, `orderBySteamid`, `propStates` in that order for both
+// `parseTicks` and `parseTickRange`, matching the WASM signatures.
 //
 // Run: `node check-exports.js` (from `src/node/`). Exit non-zero lists the
 // missing names per file or binary.
@@ -55,7 +57,8 @@ if (!existsSync(join(dir, 'index.d.ts'))) {
   process.exit(2)
 }
 
-const declared = declaredNames(readFileSync(join(dir, 'index.d.ts'), 'utf8'))
+const typesSource = readFileSync(join(dir, 'index.d.ts'), 'utf8')
+const declared = declaredNames(typesSource)
 const missingFromEntry = declared.filter((name) => !exported.includes(name))
 const missingFromTypes = exported.filter((name) => !declared.includes(name))
 if (missingFromEntry.length > 0 || missingFromTypes.length > 0) {
@@ -65,6 +68,33 @@ if (missingFromEntry.length > 0 || missingFromTypes.length > 0) {
   if (missingFromTypes.length > 0) {
     console.error(`check-exports: index.d.ts is missing entry exports: ${missingFromTypes.join(', ')}`)
   }
+  process.exit(1)
+}
+
+const paramsOf = (source, name) => {
+  const match = new RegExp(`export declare function ${name}\\(([^)]*)\\)`).exec(source)
+  return match?.[1] ?? null
+}
+
+const paramsInOrder = (params, names) => {
+  if (params === null) return false
+  let cursor = 0
+  for (const name of names) {
+    const match = new RegExp(`\\b${name}\\??:`).exec(params.slice(cursor))
+    if (!match) return false
+    cursor += match.index + match[0].length
+  }
+  return true
+}
+
+const orderedParams = ['structOfArrays', 'orderBySteamid', 'propStates']
+const orderOk = ['parseTicks', 'parseTickRange'].every((name) =>
+  paramsInOrder(paramsOf(typesSource, name), orderedParams)
+)
+if (!orderOk) {
+  console.error(
+    'check-exports: parseTicks and parseTickRange declarations must keep structOfArrays, orderBySteamid, propStates in that order'
+  )
   process.exit(1)
 }
 

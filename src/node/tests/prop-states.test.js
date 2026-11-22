@@ -12,8 +12,8 @@ const parse = (propStates) =>
 const parseFilter = (props, wantedTicks, propStates) =>
   parseTicks(demo, props, wantedTicks, null, false, false, propStates)
 
-const parseRange = (props, lo, hi, propStates) =>
-  parseTickRange(demo, props, lo, hi, null, false, propStates)
+const parseRange = (props, lo, hi, propStates, orderBySteamid = false) =>
+  parseTickRange(demo, props, lo, hi, null, false, orderBySteamid, propStates)
 
 test('duplicate prop state keys are rejected', () => {
   assert.throws(
@@ -117,6 +117,33 @@ test('parseTickRange applies propStates like parseTicks', () => {
     const expected = parseFilter([prop], wantedTicks, [{ prop, state }])
     const actual = parseRange([prop], lo, hi, [{ prop, state }])
     assert.deepEqual(actual, expected)
+  }
+})
+
+test('parseTickRange orderBySteamid groups rows per player with ascending ticks', () => {
+  const lo = 100
+  const hi = 300
+  const unordered = parseRange(['health'], lo, hi, null, false)
+  const ordered = parseRange(['health'], lo, hi, null, true)
+
+  assert.ok(Array.isArray(unordered))
+  assert.ok(!Array.isArray(ordered))
+
+  const steamids = Object.keys(ordered)
+  assert.ok(steamids.length > 0)
+  for (const steamid of steamids) {
+    const groupTicks = ordered[steamid].tick
+    assert.ok(groupTicks.length > 0)
+    assert.ok(groupTicks.every((tick, index, all) => index === 0 || tick >= all[index - 1]))
+  }
+
+  const expectedBySteamid = {}
+  for (const row of unordered) {
+    ;(expectedBySteamid[row.steamid] ??= []).push(row.tick)
+  }
+  assert.deepEqual(Object.keys(ordered).sort(), Object.keys(expectedBySteamid).sort())
+  for (const [steamid, groupTicks] of Object.entries(expectedBySteamid)) {
+    assert.deepEqual(ordered[steamid].tick, groupTicks)
   }
 })
 
